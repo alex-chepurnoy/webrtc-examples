@@ -8,6 +8,7 @@ import {
   subscribe,
 } from '../../diagnostics/latencyProbe';
 import MeasurementHelp from './MeasurementHelp';
+import Sparkline from './Sparkline';
 
 /*
  * Publisher-to-player latency from the frame stamp, split into the transport leg (both network
@@ -60,6 +61,17 @@ const SILENT_AFTER_MS = STALE_MS + EMIT_INTERVAL_MS;
  * and a pass through the Engine.
  */
 const NO_STAMP_AFTER_MS = 3000;
+
+/*
+ * Points kept per figure: sixty samples at the probe's 500 ms emit is thirty seconds,
+ * enough to see a climb or a spike settle, and the same point count the connection stats
+ * keep, so the two sets of graphs read at the same grain.
+ */
+const HISTORY_LENGTH = 60;
+
+const EMPTY_HISTORY = { transportMs: [], playerMs: [], totalMs: [] };
+
+const msFormat = (value) => Math.round(value) + ' ms';
 
 const ms = (value) =>
   value === null || value === undefined || Number.isNaN(value)
@@ -154,13 +166,23 @@ const Shell = ({ summary, summaryTone, children }) => (
   </div>
 );
 
-const Row = ({ label, note, value, muted }) => (
+const Row = ({ label, note, value, muted, history }) => (
   <tr className={muted ? 'wz-latency__row--muted' : undefined}>
     <th scope="row">
       {label}
       {note ? <span className="wz-latency__note">{note}</span> : null}
     </th>
-    <td className="wz-latency__value">{value}</td>
+    <td className="wz-latency__value">
+      {/* The shape sits to the left of the number, so the number stays right-aligned where
+          the eye already knows it. Under two points there is nothing to draw, and nothing
+          is drawn: a young session looks exactly as it did before this feature. */}
+      <span className="wz-latency__reading">
+        {history && history.length >= 2 ? (
+          <Sparkline points={history} format={msFormat} ariaLabel={label + ' history'} />
+        ) : null}
+        <span>{value}</span>
+      </span>
+    </td>
   </tr>
 );
 
@@ -184,6 +206,7 @@ const LatencyGroup = ({ connected, videoCodec = null }) => {
   const enabled = useSelector((state) => state.playSettings.latencyProbe) === true;
 
   const [sample, setSample] = useState(null);
+  const [history, setHistory] = useState(EMPTY_HISTORY);
   const [receivedAt, setReceivedAt] = useState(0);
   const [startedAt, setStartedAt] = useState(0);
   const [now, setNow] = useState(() => Date.now());
@@ -194,6 +217,7 @@ const LatencyGroup = ({ connected, videoCodec = null }) => {
     if (!listening) {
       // So a figure from the previous session cannot reappear as this one's.
       setSample(null);
+      setHistory(EMPTY_HISTORY);
       return undefined;
     }
 
@@ -205,6 +229,22 @@ const LatencyGroup = ({ connected, videoCodec = null }) => {
       if (!next) return;
       setSample(next);
       setReceivedAt(Date.now());
+      // History keeps only figures the panel would have shown. A transport or total figure
+      // whose clock the probe cannot stand behind never becomes part of the shape either.
+      // The player leg needs no clock, so it is kept either way.
+      const clockUsable = describeClock(next.clock).usable;
+      setHistory((prev) => {
+        const push = (list, value) => {
+          if (!Number.isFinite(value)) return list;
+          const grown = [...list, value];
+          return grown.length > HISTORY_LENGTH ? grown.slice(grown.length - HISTORY_LENGTH) : grown;
+        };
+        return {
+          transportMs: clockUsable ? push(prev.transportMs, next.transportMs) : prev.transportMs,
+          playerMs: push(prev.playerMs, next.playerMs),
+          totalMs: clockUsable ? push(prev.totalMs, next.totalMs) : prev.totalMs,
+        };
+      });
     });
 
     return () => {
@@ -277,16 +317,19 @@ const LatencyGroup = ({ connected, videoCodec = null }) => {
             label="Publisher to player"
             note="network, Engine, network"
             value={needsClock(sample.transportMs)}
+            history={clock.usable ? history.transportMs : null}
           />
           <Row
             label="Player jitter buffer, decode and display"
             note="this browser"
             value={ms(sample.playerMs)}
+            history={history.playerMs}
           />
           <Row
             label="Total"
             note="stamp to expected display"
             value={needsClock(sample.totalMs)}
+            history={clock.usable ? history.totalMs : null}
           />
           <Row
             label="Clock"

@@ -56,6 +56,15 @@
   color: var(--wz-text-subtle);
 }
 
+/* Graph to the left, number to the right: the number keeps its place and its alignment,
+   and the shape reads as context on the way to it. */
+.wz-latency__reading {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .wz-latency__value {
   padding: 5px 12px;
   width: 1%;

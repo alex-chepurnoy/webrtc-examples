@@ -1554,6 +1554,15 @@ test.describe('the combined page clock', () => {
       await expect(row(name)).toContainText(/\d+\s*ms/, { timeout: 20_000 });
       await expect(row(name)).not.toContainText('\u00b1');
     }
+
+    // ENG-5152: once two samples exist, the three measured rows carry a history graph to
+    // the left of the number, and the two non-measured rows never do.
+    for (const name of ['Publisher to player', 'Player jitter buffer', 'Total']) {
+      await expect(row(name).locator('.wz-spark svg')).toBeVisible({ timeout: 20_000 });
+    }
+    for (const name of ['Clock', 'Frames missed']) {
+      await expect(row(name).locator('.wz-spark')).toHaveCount(0);
+    }
   });
 });
 
