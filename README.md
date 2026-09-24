@@ -40,7 +40,7 @@ You'll need to set up WebRTC for Wowza Streaming Engine to run the examples. For
 
 - **Updated engine WebRTC implementation** — v2 targets the modernized WebRTC implementation introduced in Wowza Streaming Engine 4.11, which includes WHIP/WHEP support, Trickle ICE, HEVC and VP9 codec support, and signaling modernization.
 - **Configurable ICE servers** — STUN and TURN servers can now be set from the UI. Multiple servers can be provided as a comma-separated list. Credentials for TURN servers (username and password) are also configurable.
-- **SecureToken support** — Wowza Secure Token hash generation is now available in the React example. The token is computed client-side using the Web Crypto API (SHA-256) and sent with the publish/play request. See `v2/src/react-example/src/webrtc/SecureToken.js` for usage notes.
+- **SecureToken support** — Wowza Secure Token hash generation is now available in the React example. The token is computed client-side using the Web Crypto API (SHA-256) and sent with the publish/play request. See `src/webrtc/SecureToken.js` for usage notes.
 - **Form validation** — Required fields (application name and stream name) are validated before a connection is attempted, surfacing errors early instead of failing silently.
 - **Current build toolchain** — v2 builds with [Vite](https://vite.dev/) on React 19, Redux Toolkit and Bootstrap 5.3. `npm install` reports no known vulnerabilities, `npm run build` produces no warnings, and no `--openssl-legacy-provider` workaround is needed. Bootstrap is installed from npm and bundled, and the handful of icons are inline SVG, so the built page loads nothing from a third-party CDN at runtime and waits on no icon font.
 
@@ -137,7 +137,7 @@ That placement is the entire point.
   figure assembled from RTCP statistics describing a different part of the pipeline.
 - **The encoder cannot corrupt it.** This is what defeats the obvious alternative, drawing
   a timestamp into the pixels. Measured against this repo's own pixel-stamp prototype
-  (`v2/src/react-example/src/utils/timecode.js`, kept as a tested codec and unused): 80% of
+  (`src/utils/timecode.js`, kept as a tested codec and unused): 80% of
   frames readable at the source rendition, but only **8.7%** once the encoder was told to
   halve the resolution with `scaleResolutionDownBy: 2`, and 22 of 300 on a simulcast rung.
   Worse than the loss rate, a pixel stamp fabricates confident wrong numbers on the frames
@@ -241,7 +241,6 @@ their figures are per side and do not sum to a round-trip measurement.
 ### Running the tests
 
 ```bash
-cd v2/src/react-example
 npm test          # unit tests (Vitest)
 npm run test:e2e  # end-to-end tests (Playwright)
 ```
@@ -266,84 +265,37 @@ useful without a server. It covers publish and play over both signalling paths, 
 
 ### Directory structure
 
-The examples are organized into two versions:
+The repository is a single React app. The legacy v1 examples (jQuery and the Redux-based React example) have been removed; they remain in the upstream repository's history.
 
-#### v2
-
-- `v2/src/react-example` — React example with the latest features and fixes
-    - `v2/src/react-example/src/components` — React components for the publish and play examples
-        - `play` — Components for playing back a WebRTC stream
-        - `publish` — Components for publishing a WebRTC stream
-    - `v2/src/react-example/src/hooks`
-        - `useMediaStream.js` — Custom hook for managing the active media stream ref
-    - `v2/src/react-example/src/webrtc` — JavaScript files for managing the WebRTC setup
-        - `SecureToken.js` — Builds a secure token hash
-        - `getDevices.js`, `getUserMedia.js`, `getDisplayScreen.js` — Media device helpers
-        - `replaceAudioTrack.js`, `replaceVideoTrack.js` — Track replacement utilities
-        - `startPlay.js`, `stopPlay.js`, `startPublish.js`, `stopPublish.js` — Stream lifecycle helpers
-    - `v2/src/react-example/src/utils` — Utility functions
-        - `IceServersUtils.js` — Validation and configuration helpers for STUN/TURN ICE servers
-        - `ValidationUtils.js` — Form validation utilities
-        - `CookieUtils.js` — Cookie read/write helpers
-    - `v2/src/react-example/src/actions`, `v2/src/react-example/src/reducers` — Redux state management
-
-#### v1 (legacy)
-
-- `v1/src/jquery-example` — Vanilla JavaScript/jQuery example
-    - `css` and `images` — Assets used by the example HTML pages
-    - `lib` — JavaScript files for managing the WebRTC setup
-        - `AvMenu.js` — Controls the selected input for publishing and screen sharing
-        - `SecureToken.js` — Builds a secure token hash
-        - `Settings.js` — Creates a set of configuration settings and copy functionality
-        - `SoundMeter.js` — Provides an audio meter
-        - `WowzaMungeSDP.js` — Utilities for modifying SDP
-        - `WowzaPeerConnectionPlay.js` — Manages the signaling process for playback
-        - `WowzaPeerConnectionPublish.js` — Manages the signaling process for publishing
-        - `WowzaWebRTCAPI.js` — Core WebRTC API wrapper
-        - `WowzaWebRTCPlay.js` — Controls the playback state
-        - `WowzaWebRTCPublish.js` — Controls the publishing state
-    - `dev-view-publish.html` — Example page for publishing a WebRTC stream with video, audio, and screen share
-    - `dev-view-play.html` — Example page for playing back a WebRTC stream
-    - `dev-view-chat.html` — Example page for a WebRTC chat session
-    - `play.js` and `publish.js` — JavaScript files for controlling the WebRTC setup
-- `v1/src/react-example` — React example (Redux-based)
-    - `src/components` — React components for the publish, play, meeting, and composite examples
-    - `src/webrtc` — JavaScript files for managing the WebRTC setup
-    - `src/actions`, `src/reducers` — Redux state management
+- `src/components` — React components for the publish and play examples
+    - `play` — Components for playing back a WebRTC stream
+    - `publish` — Components for publishing a WebRTC stream
+- `src/hooks`
+    - `useMediaStream.js` — Custom hook for managing the active media stream ref
+- `src/webrtc` — JavaScript files for managing the WebRTC setup
+    - `SecureToken.js` — Builds a secure token hash
+    - `getDevices.js`, `getUserMedia.js`, `getDisplayScreen.js` — Media device helpers
+    - `replaceAudioTrack.js`, `replaceVideoTrack.js` — Track replacement utilities
+    - `startPlay.js`, `stopPlay.js`, `startPublish.js`, `stopPublish.js` — Stream lifecycle helpers
+- `src/utils` — Utility functions
+    - `IceServersUtils.js` — Validation and configuration helpers for STUN/TURN ICE servers
+    - `ValidationUtils.js` — Form validation utilities
+    - `CookieUtils.js` — Cookie read/write helpers
+- `src/actions`, `src/reducers` — Redux state management
+- `e2e` — End-to-end tests (Playwright)
+- `public` — Static assets copied into the build as is
 
 ### Run the example code
 
 >	**Note:**
 >   If you're not running the examples from `localhost`, an HTTPS connection is required for WebRTC to access local devices.
 
-#### v2 React example (recommended)
-
 ```bash
-cd v2/src/react-example
 npm install
 npm start
 ```
 
 Go to `localhost:3000` to view the example.
-
-#### v1 React example
-
-```bash
-cd v1/src/react-example
-npm install
-npm start
-```
-
-Go to `localhost:3000` to view the example.
-
-#### v1 jQuery example
-
-```bash
-cd v1/src/jquery-example
-npx serve
-```
-
-Go to `localhost:3000` to view the examples.
 
 ## More resources
 
