@@ -1,11 +1,22 @@
 /*
- * Chooses which video track a publish carries: the selected camera, or, when it has no open
- * track, the camera that is open, which is what the preview shows.
+ * Chooses which video track a publish carries: the selected camera, or, when that camera has
+ * no open track, another open camera, which is what the preview shows.
  */
+
+/*
+ * Selections that mean "send no video". '' is the None option; 'none' is what the page sets
+ * when a screen share ends mid-publish. Neither names a camera, so neither may fall back to one.
+ */
+const NO_VIDEO_IDS = new Set(['', 'none']);
+
+/** True when the selection deliberately carries no video. */
+export const isNoVideoSelection = (deviceId) => deviceId == null || NO_VIDEO_IDS.has(deviceId);
+
+const isOpen = (track) => Boolean(track) && track.readyState !== 'ended';
 
 /**
  * @param {Object} videoTracksMap  deviceId -> MediaStreamTrack
- * @param {string} deviceId        the selected camera, '' for none, 'screen' for share
+ * @param {string} deviceId        the selected camera, '' or 'none' for no video, 'screen' for share
  * @param {MediaStreamTrack|null} displayScreenTrack
  * @returns {{ track: MediaStreamTrack|null, usedFallback: boolean }}
  */
@@ -13,17 +24,18 @@ export const selectPublishVideoTrack = (videoTracksMap, deviceId, displayScreenT
   if (deviceId === 'screen') {
     return { track: displayScreenTrack || null, usedFallback: false };
   }
-  if (deviceId === '' || deviceId == null) {
+  if (isNoVideoSelection(deviceId)) {
     return { track: null, usedFallback: false };
   }
 
   const map = videoTracksMap || {};
   const exact = map[deviceId];
-  if (exact) return { track: exact, usedFallback: false };
+  if (isOpen(exact)) return { track: exact, usedFallback: false };
 
-  // Fall back to whatever track is actually open, which is what the preview shows.
-  const firstKey = Object.keys(map)[0];
-  if (firstKey) return { track: map[firstKey], usedFallback: true };
+  // A real camera was chosen and has no open track: send whichever camera is open, which is
+  // what the preview shows. An ended track sends nothing, so it is never a candidate.
+  const fallbackKey = Object.keys(map).find((key) => key !== deviceId && isOpen(map[key]));
+  if (fallbackKey) return { track: map[fallbackKey], usedFallback: true };
 
   return { track: null, usedFallback: false };
 };

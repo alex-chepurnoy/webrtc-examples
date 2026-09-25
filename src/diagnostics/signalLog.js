@@ -19,7 +19,7 @@ export const clearLog = () => store.set([]);
 export const getEntries = store.get;
 
 /**
- * direction: 'out' | 'in' | 'info' | 'error'
+ * direction: 'out' | 'in' | 'info' | 'warn' | 'error'
  * channel:   'ws' | 'http' | 'ice' | 'pc'
  */
 export const logEvent = (direction, channel, label, detail) => {

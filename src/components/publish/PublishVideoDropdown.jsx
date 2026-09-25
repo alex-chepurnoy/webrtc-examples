@@ -6,7 +6,7 @@ import * as PublishSettingsActions from '../../actions/publishSettingsActions';
 import { SET_MEDIA_STREAM } from '../../actions/mediaActions';
 import { SET_PUBLISH_VIDEO_TRACK } from '../../actions/publishSettingsActions';
 import useMediaStream from '../../hooks/useMediaStream';
-import { selectPublishVideoTrack } from '../../utils/VideoTrackUtils';
+import { isNoVideoSelection, selectPublishVideoTrack } from '../../utils/VideoTrackUtils';
 import { logEvent } from '../../diagnostics/signalLog';
 import { clockedTrackFor, releaseClockedTrack } from '../../diagnostics/burnedClock';
 
@@ -50,8 +50,11 @@ const PublishVideoDropdown = () => {
     // The effect re-runs on unrelated identity changes; log once per selection.
     if (usedFallback && loggedFallbackFor.current !== videoTrack1DeviceId) {
       loggedFallbackFor.current = videoTrack1DeviceId;
-      logEvent('info', 'pc', 'publish camera fallback: selected device had no open track', {
+      // A warning: a different physical camera from the one chosen is what goes on air.
+      logEvent('warn', 'pc', 'publish camera fallback: sending ' + (track?.label || 'another camera')
+        + ' because the selected camera has no open track', {
         requestedDeviceId: videoTrack1DeviceId,
+        sentTrackLabel: track?.label || null,
         openDeviceIds: Object.keys(videoTracksMap || {}),
       });
     }
@@ -73,7 +76,7 @@ const PublishVideoDropdown = () => {
         Video Input
       </label>
       <select id="camera-list-select" className="form-select"
-        value={publishSettings.videoTrack1DeviceId}
+        value={isNoVideoSelection(publishSettings.videoTrack1DeviceId) ? '' : publishSettings.videoTrack1DeviceId}
         onChange={(e)=>dispatch({type:PublishSettingsActions.SET_PUBLISH_VIDEO_TRACK1_DEVICEID,videoTrack1DeviceId:e.target.value})}
       >
         <option value=''>None</option>

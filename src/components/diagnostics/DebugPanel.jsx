@@ -18,7 +18,7 @@ const CHANNELS = [
   { key: 'pc', label: 'Connection', empty: 'No peer connection state changes recorded yet.' },
 ];
 
-const ARROW = { out: '\u2191', in: '\u2193', info: '\u00b7', error: '!' };
+const ARROW = { out: '\u2191', in: '\u2193', info: '\u00b7', warn: '!', error: '!' };
 
 const time = (ms) => {
   const d = new Date(ms);

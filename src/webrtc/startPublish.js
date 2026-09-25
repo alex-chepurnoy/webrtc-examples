@@ -5,6 +5,7 @@ import { applyVideoCodecPreference, isVideoCodecOfferable } from "../utils/Codec
 import { describeRejectedVideo, videoWasRejected } from "../utils/SdpAnswerUtils";
 import { describeSignalingError, instrumentPeerConnection, instrumentTrack, instrumentWebSocket, isWebSocketClosing, logEvent, loggedFetch } from "../diagnostics/signalLog";
 import { validateParams } from "../utils/ValidationUtils";
+import { isNoVideoSelection } from "../utils/VideoTrackUtils";
 import { keepUntilStopped, releaseSessionHandles } from "./sessionHandles";
 import { releasePeerConnection } from "../diagnostics/connections";
 import {
@@ -113,7 +114,7 @@ const armEncodedStreams = (session, publishSettings) => {
 const addVideoSender = (peerConnection, videoTrack, publishSettings) => {
   // A publish with no video still reaches "connected" and shows LIVE, so say so here.
   // Error only when a camera was chosen and no track came out; "None" is a choice.
-  const cameraChosen = Boolean(publishSettings.videoTrack1DeviceId);
+  const cameraChosen = !isNoVideoSelection(publishSettings.videoTrack1DeviceId);
   logEvent(
     videoTrack == null && cameraChosen ? 'error' : 'info',
     'pc',
