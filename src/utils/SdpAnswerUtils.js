@@ -96,9 +96,10 @@ export const describeRejectedVideo = (answerSdp, offeredCodec, browserOffersCode
   /*
    * Unknown support is not a verdict on either side. Whether the offer carried the codec
    * or fell back to the full list cannot be told apart here, so say what was refused and
-   * where each half would be checked, without claiming which one it was.
+   * where each half would be checked, without claiming which one it was. A preference that
+   * was applied settles it: the offer carried only the chosen codec, so the Engine refused it.
    */
-  if (asked && browserOffersCodec == null) {
+  if (asked && browserOffersCodec == null && preferenceApplied !== true) {
     return `No video is being sent: the Engine application refused the video offer. It could `
       + `not be determined whether this browser can encode ${asked} for WebRTC, so either the `
       + `browser could not offer it or the application does not accept it. Check `
