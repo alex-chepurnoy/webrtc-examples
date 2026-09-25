@@ -324,14 +324,22 @@
   color: var(--wz-text-subtle);
 }
 
-/* One line inside 39px. The panel is resizable down to 280px, so the message shortens with
-   the ellipsis rather than pushing the rule out of alignment; the link stays reachable. */
-.wz-inspector__foot small {
+/*
+ * Up to two lines inside the fixed 39px, so the rule stays aligned with the bar beside it.
+ * The message fits on one line only above about a 320px panel, and the panel resizes down to
+ * 280px; an ellipsis there cut off the link, which is the last thing in the message and the
+ * only part that does anything. Two 11px lines need 28px, which the height already holds.
+ *
+ * Scoped under .wz-inspector so it outweighs the field hint rule in inspector.css, which
+ * styles every small in the panel and would otherwise add its margin and line height here.
+ */
+.wz-inspector .wz-inspector__foot small {
   display: block;
   max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.25;
+  white-space: normal;
 }
 
 /* Field group heading inside a tab. */

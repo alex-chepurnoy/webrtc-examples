@@ -893,6 +893,37 @@ test.describe('panel structure', () => {
     await page.goto('/#/play');
     await expect(page.locator('.wz-inspector__foot')).toBeVisible();
   });
+
+  // The link is the last thing in the message, so it is what an ellipsis cuts off first.
+  // Checked at the default panel width and at the narrowest the panel resizes to.
+  for (const width of [340, 280]) {
+    test(`the legacy Engine link is on screen at a ${width}px panel`, async ({ page }) => {
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await page.goto('/#/publish');
+      await page.evaluate((w) => window.localStorage.setItem('wz.inspector.width', String(w)), width);
+      await page.reload();
+
+      const link = page.locator('.wz-inspector__foot a');
+      await expect(link).toBeVisible();
+      await expect(link).toHaveText('Go here');
+
+      const box = await page.evaluate(() => {
+        const a = document.querySelector('.wz-inspector__foot a').getBoundingClientRect();
+        const small = document.querySelector('.wz-inspector__foot small');
+        const clip = small.getBoundingClientRect();
+        const foot = document.querySelector('.wz-inspector__foot').getBoundingClientRect();
+        return {
+          inside: a.left >= clip.left - 0.5 && a.right <= clip.right + 0.5
+            && a.top >= foot.top - 0.5 && a.bottom <= foot.bottom + 0.5,
+          clipped: small.scrollWidth > small.clientWidth || small.scrollHeight > small.clientHeight,
+          panel: document.querySelector('.wz-inspector').getBoundingClientRect().width,
+        };
+      });
+      expect(box.panel).toBeCloseTo(width, 0);
+      expect(box.clipped, 'the message overflows its box').toBe(false);
+      expect(box.inside, 'the link sits inside the foot').toBe(true);
+    });
+  }
 });
 
 test.describe('theme colors', () => {
