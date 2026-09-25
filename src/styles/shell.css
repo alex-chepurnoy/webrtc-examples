@@ -163,9 +163,14 @@
   color: var(--wz-text-subtle);
 }
 
+/*
+ * Scrolls when the log below is dragged tall, rather than spilling its figures and graphs over
+ * the log. The picture keeps a floor, so a short stage scrolls instead of crushing it to a strip.
+ */
 .wz-stage__body {
   flex-grow: 1;
   min-height: 0;
+  overflow-y: auto;
   padding: 16px 18px 12px;
   display: flex;
   gap: 14px;
@@ -174,6 +179,7 @@
 .wz-stage__video {
   flex-grow: 1;
   min-width: 0;
+  min-height: 180px;
   position: relative;
 }
 
@@ -182,6 +188,7 @@
 .wz-stage__stats { flex-shrink: 0; margin: 0 18px 14px; }
 
 .wz-stage__note {
+  flex-shrink: 0;
   margin: 0 18px 10px;
   font-size: 11px;
   line-height: 1.5;

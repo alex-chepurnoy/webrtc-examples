@@ -91,6 +91,9 @@
 /* ------------------------------------------------------------------ docked log */
 
 .wz-debug {
+  /* Above the stage, so nothing positioned in it can paint over the log. */
+  position: relative;
+  z-index: 1;
   flex-shrink: 0;
   background: var(--wz-surface-sunken);
   border-top: 1px solid var(--wz-border-strong);
