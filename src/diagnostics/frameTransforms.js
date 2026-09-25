@@ -7,6 +7,7 @@
 import {
   MAX_RUNG,
   MAX_SEQUENCE,
+  describeFrameLayout,
   findSeiPayload,
   insertStamp,
   stampInsertionOffset,
@@ -70,13 +71,22 @@ const rungKeyOf = (metadata) => metadata?.synchronizationSource
  * provisional, and a frame that does not parse as H.264 must never get an SEI, which would
  * corrupt it. Such a frame consumes no sequence number.
  */
-export const createFrameStamper = ({ now = () => Date.now() } = {}) => {
+export const createFrameStamper = ({ now = () => Date.now(), onRefused = null } = {}) => {
   const sequences = new Map();
   // SSRC to the small index that goes in the stamp. See rungIndexFor.
   const rungIndices = new Map();
+  let refusalReported = false;
 
   return (frame, wanted) => {
-    if (!wanted || stampInsertionOffset(frame.data) === null) return null;
+    if (!wanted) return null;
+    if (stampInsertionOffset(frame.data) === null) {
+      // Said once: an encoder whose layout this does not understand refuses every frame.
+      if (!refusalReported && typeof onRefused === 'function') {
+        refusalReported = true;
+        onRefused(describeFrameLayout(frame.data));
+      }
+      return null;
+    }
     const key = rungKeyOf(metadataOf(frame));
     const rung = rungIndexFor(rungIndices, key);
     const sequence = nextSequenceFor(sequences, key);

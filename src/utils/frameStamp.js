@@ -160,6 +160,9 @@ const NAL_TYPE_IDR = 5;
 const NAL_TYPE_SPS = 7;
 const NAL_TYPE_PPS = 8;
 const NAL_TYPE_AUD = 9;
+const NAL_TYPE_END_OF_SEQUENCE = 10;
+const NAL_TYPE_END_OF_STREAM = 11;
+const NAL_TYPE_FILLER = 12;
 
 /* Types 1 to 5 carry picture data. Everything that belongs to a picture comes before the first. */
 const isVclType = (type) => type >= 1 && type <= 5;
@@ -202,6 +205,9 @@ const isPlausibleH264Header = (header) => {
   switch (header & 0x1f) {
     case NAL_TYPE_SEI:
     case NAL_TYPE_AUD:
+    case NAL_TYPE_END_OF_SEQUENCE:
+    case NAL_TYPE_END_OF_STREAM:
+    case NAL_TYPE_FILLER: // hardware encoders pad to a constant bitrate with it
       return !referenced;
     case NAL_TYPE_SPS:
     case NAL_TYPE_PPS:
@@ -227,8 +233,8 @@ export const stampInsertionOffset = (frameBytes) => {
   const bytes = asBytes(frameBytes);
   if (bytes === null || bytes.length < 4) return null;
   const first = nextStartCode(bytes, 0);
-  // Annex B starts at the first byte, with an optional leading zero_byte.
-  if (first !== 0 && !(first === 1 && bytes[0] === 0x00)) return null;
+  // Annex B allows any number of zero bytes ahead of the first start code, and nothing else.
+  if (first === -1 || !bytes.subarray(0, first).every((b) => b === 0x00)) return null;
 
   let offset = null;
   let plausible = true;
@@ -244,6 +250,23 @@ export const stampInsertionOffset = (frameBytes) => {
     return false;
   });
   return plausible ? offset : null;
+};
+
+/**
+ * A short account of how a frame is laid out, for the log line that says why a frame could not
+ * be stamped: the bytes ahead of the first start code, then each NAL up to the first slice as
+ * type/nal_ref_idc. For example "lead 00 00 00 01, NAL 9/0 7/3 8/3 5/3".
+ */
+export const describeFrameLayout = (frameBytes) => {
+  const bytes = asBytes(frameBytes);
+  if (bytes === null) return 'not bytes';
+  const lead = Array.from(bytes.subarray(0, 6), (b) => b.toString(16).padStart(2, '0')).join(' ');
+  const nals = [];
+  walkNalUnits(bytes, ({ header, type }) => {
+    nals.push(`${type}/${(header >> 5) & 0x03}${(header & 0x80) !== 0 ? '!' : ''}`);
+    return isVclType(type) || nals.length >= 12;
+  });
+  return `${bytes.length} bytes, lead ${lead}, NAL ${nals.length ? nals.join(' ') : 'none'}`;
 };
 
 /**

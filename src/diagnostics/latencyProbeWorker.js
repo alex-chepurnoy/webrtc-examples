@@ -7,7 +7,8 @@
  * Messages in:   { op: 'sender' | 'receiver', readable, writable, stamp }   start, once
  *                { op: 'stamp', stamp }                                      codec decision
  *                { op: 'stop' }                                              pass through
- * Messages out:  ready, sent { rung, sequence, sentAt }, frame (see readFrame), error, ended
+ * Messages out:  ready, sent { rung, sequence, sentAt }, refused { layout }, frame (see readFrame),
+ *                error, ended
  */
 
 import { createFrameStamper, readFrame } from './frameTransforms';
@@ -25,7 +26,9 @@ const fail = (label, error) => {
 
 const start = ({ op, readable, writable, stamp }) => {
   wanted = stamp === true;
-  const stamper = createFrameStamper();
+  const stamper = createFrameStamper({
+    onRefused: (layout) => self.postMessage({ op: 'refused', layout }),
+  });
 
   const perFrame = op === 'sender'
     ? (frame) => {

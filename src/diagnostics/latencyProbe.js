@@ -740,7 +740,15 @@ export const startSenderStamp = (videoSender, { videoCodec } = {}) => {
     }
   };
 
-  const stamper = createFrameStamper();
+  // A frame the stamper cannot parse is sent unstamped, which the player can only report as
+  // "no stamp". This line is what says why, on the side that knows.
+  const onRefused = (layout) => {
+    if (stopped) return;
+    logEvent('error', 'pc', 'latency probe could not stamp an H.264 frame; its layout is not one '
+      + 'it knows, so frames go out unstamped', layout);
+  };
+
+  const stamper = createFrameStamper({ onRefused });
   const attached = pipeEncodedStream(videoSender, {
     label: 'sender',
     mainThread: () => new TransformStream({
@@ -760,7 +768,10 @@ export const startSenderStamp = (videoSender, { videoCodec } = {}) => {
     worker: {
       op: 'sender',
       initial: () => ({ stamp: !stopped && decision.stamp }),
-      onMessage: (data) => { if (data.op === 'sent') onSent(data); },
+      onMessage: (data) => {
+        if (data.op === 'sent') onSent(data);
+        else if (data.op === 'refused') onRefused(data.layout);
+      },
     },
     isStopped: () => stopped,
   });

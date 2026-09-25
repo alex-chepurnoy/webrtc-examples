@@ -7,6 +7,7 @@ import {
   STAMP_UUID,
   addEmulationPrevention,
   buildSeiPayload,
+  describeFrameLayout,
   findSeiPayload,
   insertStamp,
   removeEmulationPrevention,
@@ -285,6 +286,25 @@ describe('placing the stamp in a frame', () => {
     expect(stampInsertionOffset(original)).toBe(sps().length);
   });
 
+  // Seen from hardware encoders: constant bitrate padding, and extra zeros ahead of the first
+  // start code, which Annex B allows.
+  it('stamps a frame that carries filler data ahead of the slice', () => {
+    const stamped = insertStamp(frame(aud(), nal(0x0c, 0xff, 0xff, 0x80), deltaSlice()), stamp);
+    expect(nalTypes(stamped)).toEqual([9, 12, 6, 1]);
+    expect(findSeiPayload(stamped)).toEqual(stamp);
+  });
+
+  it('stamps a frame that starts with extra leading zero bytes', () => {
+    const stamped = insertStamp(frame([0x00, 0x00], sps(), pps(), idrSlice()), stamp);
+    expect(findSeiPayload(stamped)).toEqual(stamp);
+  });
+
+  it('describes a frame it cannot stamp, for the log', () => {
+    expect(describeFrameLayout(frame(aud(), sps(), pps(), idrSlice())))
+      .toMatch(/lead 00 00 00 01 09 f0, NAL 9\/0 7\/3 8\/3 5\/3$/);
+    expect(describeFrameLayout(Uint8Array.from([0x50, 0x42, 0x00]))).toMatch(/NAL none$/);
+  });
+
   it.each([
     ['no start code, as a VP8, VP9 or AV1 frame has', Uint8Array.from([0x50, 0x42, 0x00, 0x9d, 0x01, 0x2a])],
     ['an HEVC VPS, whose header is not an H.264 NAL here', frame(nal(0x40, 0x01, 0x0c), nal(0x26, 0x01, 0xaf))],
@@ -292,6 +312,8 @@ describe('placing the stamp in a frame', () => {
     ['an SEI that claims to be a reference, which H.264 forbids', frame(nal(0x26, 0x01), idrSlice())],
     ['no slice at all', frame(sps(), pps())],
     ['a forbidden_zero_bit set', frame(nal(0xe5, 0x88))],
+    ['something other than zeros ahead of the first start code', frame([0x01], idrSlice())],
+    ['a filler NAL that claims to be a reference', frame(nal(0x2c, 0xff), deltaSlice())],
     ['nothing', new Uint8Array(0)],
   ])('refuses a frame with %s', (_label, bytes) => {
     expect(stampInsertionOffset(bytes)).toBeNull();

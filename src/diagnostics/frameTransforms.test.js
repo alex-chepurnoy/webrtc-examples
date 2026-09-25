@@ -48,6 +48,17 @@ describe('createFrameStamper', () => {
     // A refused frame consumes no sequence number.
     expect(stamp(encoded(deltaFrame()), true).sequence).toBe(0);
   });
+
+  it('says once, with the layout, when it cannot stamp a frame it was asked to', () => {
+    const refused = [];
+    const stamp = createFrameStamper({ onRefused: (layout) => refused.push(layout) });
+    const odd = () => encoded(Uint8Array.from([...START, 0x7f, 0x01, ...START, 0x41, 0x9a]).buffer);
+    stamp(odd(), true);
+    stamp(odd(), true);
+    stamp(odd(), false);
+    expect(refused).toHaveLength(1);
+    expect(refused[0]).toMatch(/NAL 31\/3/);
+  });
 });
 
 describe('readFrame', () => {
