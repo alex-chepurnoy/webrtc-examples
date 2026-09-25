@@ -38,6 +38,26 @@ export const logEvent = (direction, channel, label, detail) => {
     : [...entries, entry]);
 };
 
+/*
+ * Fields that authorize a session. A play OFFER and every play CANDIDATE carry secureToken,
+ * and the panel's Copy button puts whatever is logged on the clipboard, so these are masked
+ * before a frame is recorded. The frame sent to the Engine is untouched.
+ */
+const SENSITIVE_KEY = /^(securetoken|authtoken|token|accesstoken|refreshtoken|secret|password|passwd|authorization|apikey|api_key|hash)$/i;
+
+export const REDACTED = '[redacted]';
+
+/** A copy of value with every sensitive field masked, at any depth. */
+export const redactSecrets = (value) => {
+  if (Array.isArray(value)) return value.map(redactSecrets);
+  if (value === null || typeof value !== 'object') return value;
+  const out = {};
+  for (const [key, inner] of Object.entries(value)) {
+    out[key] = SENSITIVE_KEY.test(key) && inner != null && inner !== '' ? REDACTED : redactSecrets(inner);
+  }
+  return out;
+};
+
 const summarize = (raw) => {
   if (typeof raw !== 'string') return { label: typeof raw, detail: raw };
   try {
@@ -51,7 +71,7 @@ const summarize = (raw) => {
       (parsed.iceCandidates || parsed.candidate ? 'iceCandidate' : null) ||
       (parsed.statusCode ? `status ${parsed.statusCode}` : null) ||
       'message';
-    return { label, detail: parsed };
+    return { label, detail: redactSecrets(parsed) };
   } catch {
     return { label: 'text', detail: raw.length > 2000 ? `${raw.slice(0, 2000)}...` : raw };
   }

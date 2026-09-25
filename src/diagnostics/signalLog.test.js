@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
-  CLOSING_EXPLANATION, SIGNALING_ERROR_EXPLANATION, clearLog, describeSignalingError, getEntries,
-  instrumentPeerConnection, instrumentWebSocket, isWebSocketClosing, logEvent, logHttp,
-  markWebSocketClosing, subscribe,
+  CLOSING_EXPLANATION, REDACTED, SIGNALING_ERROR_EXPLANATION, clearLog, describeSignalingError,
+  getEntries, instrumentPeerConnection, instrumentWebSocket, isWebSocketClosing, logEvent, logHttp,
+  markWebSocketClosing, redactSecrets, subscribe,
 } from './signalLog';
 
 // A minimal EventTarget-based stand-in. Real WebSocket/RTCPeerConnection are not in jsdom.
@@ -200,5 +200,62 @@ describe('describing a signalling failure', () => {
     expect(describeSignalingError(new Error('boom'))).toBe('boom');
     expect(describeSignalingError({ message: 'Stream not found' })).toBe('Stream not found');
     expect(describeSignalingError('plain words')).toBe('plain words');
+  });
+});
+
+// A play OFFER and every play CANDIDATE carry secureToken; Copy puts the log on the clipboard.
+describe('secrets in logged frames', () => {
+  const token = { hash: 'c2VjcmV0LWhhc2g', starttime: '100', endtime: '200' };
+
+  it('masks secureToken in an outbound frame and sends the real one', () => {
+    const ws = instrumentWebSocket(new FakeSocket(), 'play');
+    const frame = JSON.stringify({
+      messageType: 'OFFER', action: 'VIEW', streamName: 'myStream', secureToken: token,
+    });
+    ws.send(frame);
+    expect(ws.sent).toEqual([frame]);
+    const { detail, label } = getEntries().at(-1);
+    expect(label).toBe('play \u2192 OFFER');
+    expect(detail.secureToken).toBe(REDACTED);
+    expect(detail.streamName).toBe('myStream');
+    expect(JSON.stringify(getEntries())).not.toContain(token.hash);
+  });
+
+  it('masks it in a candidate frame too', () => {
+    const ws = instrumentWebSocket(new FakeSocket(), 'play');
+    ws.send(JSON.stringify({ messageType: 'CANDIDATE', candidate: 'candidate:1 1 udp', secureToken: token }));
+    const { detail } = getEntries().at(-1);
+    expect(detail.secureToken).toBe(REDACTED);
+    expect(detail.candidate).toBe('candidate:1 1 udp');
+  });
+
+  it('masks it in an inbound frame', () => {
+    const ws = instrumentWebSocket(new FakeSocket(), 'play');
+    ws.dispatchEvent(Object.assign(new Event('message'), {
+      data: JSON.stringify({ statusCode: 200, message: { authToken: 'abc', sdp: 'v=0' } }),
+    }));
+    const { detail } = getEntries().at(-1);
+    expect(detail.message.authToken).toBe(REDACTED);
+    expect(detail.message.sdp).toBe('v=0');
+  });
+
+  it('masks nested and array fields, and leaves everything else alone', () => {
+    expect(redactSecrets({
+      a: [{ password: 'p' }, { secret: 's', ok: 1 }],
+      Authorization: 'Bearer x',
+      nested: { deeper: { hash: 'h' } },
+      keep: 'value',
+    })).toEqual({
+      a: [{ password: REDACTED }, { secret: REDACTED, ok: 1 }],
+      Authorization: REDACTED,
+      nested: { deeper: { hash: REDACTED } },
+      keep: 'value',
+    });
+  });
+
+  it('leaves an empty or missing token visible, since there is nothing to hide', () => {
+    expect(redactSecrets({ secureToken: null, authToken: '' })).toEqual({ secureToken: null, authToken: '' });
+    expect(redactSecrets('plain')).toBe('plain');
+    expect(redactSecrets(null)).toBeNull();
   });
 });
