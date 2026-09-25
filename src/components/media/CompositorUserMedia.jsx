@@ -176,7 +176,8 @@ const loadUserMediaForSingleCamera = (dispatch, deviceId, videoTracksMapRef, mou
 });
 
 const onScreenShareEnded = (dispatch) => {
-  dispatch({type:PublishSettingsActions.SET_PUBLISH_VIDEO_TRACK1_DEVICEID,videoTrack1DeviceId:'none'});
+  // '' is the None option. It is not a device id, so no path passes it to getUserMedia.
+  dispatch({type:PublishSettingsActions.SET_PUBLISH_VIDEO_TRACK1_DEVICEID,videoTrack1DeviceId:''});
   dispatch({type:MediaActions.SET_MEDIA_SCREEN_SHARE_ENDED});
 }
 

@@ -4,8 +4,9 @@
  */
 
 /*
- * Selections that mean "send no video". '' is the None option; 'none' is what the page sets
- * when a screen share ends mid-publish. Neither names a camera, so neither may fall back to one.
+ * Selections that mean "send no video". '' is the None option, and what the page sets when a
+ * screen share ends mid-publish. 'none' is what it used to set there, kept here so no caller
+ * that still passes it can fall back to a camera.
  */
 const NO_VIDEO_IDS = new Set(['', 'none']);
 
