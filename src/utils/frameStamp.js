@@ -163,6 +163,7 @@ const NAL_TYPE_AUD = 9;
 const NAL_TYPE_END_OF_SEQUENCE = 10;
 const NAL_TYPE_END_OF_STREAM = 11;
 const NAL_TYPE_FILLER = 12;
+const NAL_TYPE_PREFIX = 14;
 
 /* Types 1 to 5 carry picture data. Everything that belongs to a picture comes before the first. */
 const isVclType = (type) => type >= 1 && type <= 5;
@@ -214,6 +215,7 @@ const isPlausibleH264Header = (header) => {
     case NAL_TYPE_IDR:
       return referenced;
     case NAL_TYPE_SLICE:
+    case NAL_TYPE_PREFIX: // carries its slice's nal_ref_idc, so any value
       return true;
     default:
       return false;
@@ -236,17 +238,28 @@ export const stampInsertionOffset = (frameBytes) => {
   // Annex B allows any number of zero bytes ahead of the first start code, and nothing else.
   if (first === -1 || !bytes.subarray(0, first).every((b) => b === 0x00)) return null;
 
+  /*
+   * A prefix NAL (type 14) belongs to the slice straight after it, so the stamp goes in front
+   * of the prefix, never between the two. Hardware encoders that emit temporal layers write
+   * one ahead of every slice. Anything but a slice after a prefix is not H.264 we understand.
+   */
   let offset = null;
   let plausible = true;
+  let prefixAt = null;
   walkNalUnits(bytes, (nal) => {
     if (!isPlausibleH264Header(nal.header)) {
       plausible = false;
       return true;
     }
     if (isVclType(nal.type)) {
-      offset = nal.codeAt;
+      offset = prefixAt ?? nal.codeAt;
       return true;
     }
+    if (prefixAt !== null) {
+      plausible = false;
+      return true;
+    }
+    if (nal.type === NAL_TYPE_PREFIX) prefixAt = nal.codeAt;
     return false;
   });
   return plausible ? offset : null;

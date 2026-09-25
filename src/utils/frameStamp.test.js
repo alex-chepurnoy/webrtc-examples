@@ -294,6 +294,18 @@ describe('placing the stamp in a frame', () => {
     expect(findSeiPayload(stamped)).toEqual(stamp);
   });
 
+  // Alex's camera, 2026-09-25: "NAL 7/3 8/3 14/3 5/3", a prefix NAL ahead of every slice.
+  it('goes in front of a prefix NAL, never between it and its slice', () => {
+    const prefix = () => nal(0x6e, 0xc1, 0x80, 0x00);
+    const key = insertStamp(frame(sps(), pps(), prefix(), idrSlice()), stamp);
+    expect(nalTypes(key)).toEqual([7, 8, 6, 14, 5]);
+    expect(findSeiPayload(key)).toEqual(stamp);
+
+    const delta = insertStamp(frame(nal(0x2e, 0xc1, 0x80, 0x00), deltaSlice()), stamp);
+    expect(nalTypes(delta)).toEqual([6, 14, 1]);
+    expect(findSeiPayload(delta)).toEqual(stamp);
+  });
+
   it('stamps a frame that starts with extra leading zero bytes', () => {
     const stamped = insertStamp(frame([0x00, 0x00], sps(), pps(), idrSlice()), stamp);
     expect(findSeiPayload(stamped)).toEqual(stamp);
@@ -314,6 +326,7 @@ describe('placing the stamp in a frame', () => {
     ['a forbidden_zero_bit set', frame(nal(0xe5, 0x88))],
     ['something other than zeros ahead of the first start code', frame([0x01], idrSlice())],
     ['a filler NAL that claims to be a reference', frame(nal(0x2c, 0xff), deltaSlice())],
+    ['a prefix NAL not followed by its slice, as an HEVC prefix SEI reads', frame(nal(0x4e, 0x01, 0x05), nal(0x02, 0x01, 0xd0))],
     ['nothing', new Uint8Array(0)],
   ])('refuses a frame with %s', (_label, bytes) => {
     expect(stampInsertionOffset(bytes)).toBeNull();
