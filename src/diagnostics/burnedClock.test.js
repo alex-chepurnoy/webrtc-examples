@@ -98,3 +98,60 @@ describe('when the browser cannot do it', () => {
     expect(() => stop()).not.toThrow();
   });
 });
+
+/*
+ * Stand-ins for the Chromium APIs, just enough to run the transform: frames go in on the
+ * processor's readable and come out on the generator's writable.
+ */
+describe('while the camera is off', () => {
+  const withFakeBreakoutBox = async (run) => {
+    const saved = {};
+    const names = ['MediaStreamTrackProcessor', 'MediaStreamTrackGenerator', 'VideoFrame', 'OffscreenCanvas'];
+    for (const name of names) saved[name] = window[name];
+
+    let feed = null;
+    const written = [];
+    const drawn = [];
+    window.MediaStreamTrackProcessor = function Processor() {
+      this.readable = new ReadableStream({ start: (controller) => { feed = controller; } });
+    };
+    window.MediaStreamTrackGenerator = function Generator() {
+      this.enabled = true;
+      this.writable = new WritableStream({ write: (frame) => { written.push(frame); } });
+      this.stop = () => {};
+    };
+    window.VideoFrame = function Frame(canvas) { drawn.push(canvas); };
+    window.OffscreenCanvas = function Canvas(width, height) {
+      this.width = width;
+      this.height = height;
+      this.getContext = () => ({ ...fakeContext(), drawImage: () => {} });
+    };
+    try {
+      await run({ feed: () => feed, written, drawn });
+    } finally {
+      for (const name of names) window[name] = saved[name];
+    }
+  };
+
+  const frame = () => ({ displayWidth: 64, displayHeight: 48, timestamp: 1, close: () => {} });
+  const settle = () => new Promise((resolve) => { setTimeout(resolve, 0); });
+
+  it('passes frames through without drawing, and draws again when it comes back', async () => {
+    await withFakeBreakoutBox(async ({ feed, written, drawn }) => {
+      const camera = { kind: 'video', enabled: false };
+      const { stop } = burnClockIntoTrack(camera);
+
+      const dark = frame();
+      feed().enqueue(dark);
+      await settle();
+      expect(written).toEqual([dark]);
+      expect(drawn).toHaveLength(0);
+
+      camera.enabled = true;
+      feed().enqueue(frame());
+      await settle();
+      expect(drawn).toHaveLength(1);
+      stop();
+    });
+  });
+});

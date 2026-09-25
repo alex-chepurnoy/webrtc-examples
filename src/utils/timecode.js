@@ -1,13 +1,14 @@
 /*
- * A timestamp burned into the picture, so latency is measured glass to glass: unlike a
- * data-channel message, it passes through capture, encode, decode and display.
+ * A machine-readable timestamp for the pixels: the pixel-stamp prototype the frame stamp
+ * (frameStamp.js) replaced. Nothing in the app draws or reads it any more; it is kept, with its
+ * tests, as the codec the README's pixel-stamp comparison refers to.
  *
  * Deliberately crude to survive downscaling and a lossy codec: flat black and white blocks
  * sized as a fraction of the frame, read at their centers, and judged against two reference
  * blocks in the same row rather than an absolute threshold.
  *
- * Milliseconds modulo 65536 (wraps every 65.5 s); the reader resolves the wrap against its
- * own clock, which covers up to about 32 s of latency.
+ * Milliseconds modulo 65536 (wraps every 65.5 s). The wrap alone could be resolved for delays
+ * up to half that window; latencyFromTimecode accepts at most maxMs, 30 s by default.
  */
 
 export const TIMECODE_BITS = 16;
@@ -88,7 +89,10 @@ export const latencyFromTimecode = (readValue, nowMs, maxMs = 30000) => {
   return delta > maxMs ? null : delta;
 };
 
-/** Draws the pattern, and a human-readable clock of the same instant beneath it. */
+/**
+ * Draws the pattern, and a human-readable clock of the same instant beneath it, in local time
+ * like the burned-in clock (formatClock in diagnostics/burnedClock.js).
+ */
 export const drawTimecode = (context, width, height, nowMs) => {
   const size = blockSize(width);
   const bits = encodeTimecode(nowMs);
@@ -98,7 +102,10 @@ export const drawTimecode = (context, width, height, nowMs) => {
     context.fillRect(index * size, 0, size, size);
   });
 
-  const text = new Date(nowMs).toISOString().substring(11, 23);
+  const at = new Date(nowMs);
+  const pad = (value, width) => String(value).padStart(width, '0');
+  const text = `${pad(at.getHours(), 2)}:${pad(at.getMinutes(), 2)}:${pad(at.getSeconds(), 2)}`
+    + `.${pad(at.getMilliseconds(), 3)}`;
   const fontSize = Math.max(11, Math.round(height / 28));
   context.font = `600 ${fontSize}px ui-monospace, Menlo, Consolas, monospace`;
   context.textBaseline = 'top';
