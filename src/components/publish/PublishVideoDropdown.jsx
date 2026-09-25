@@ -43,8 +43,8 @@ const PublishVideoDropdown = () => {
     const { track, usedFallback } = selection;
     let videoTrack = track || undefined;
 
-     if (burnedClock) videoTrack = clockedTrackFor(videoTrack);
-     else releaseClockedTrack();
+    if (burnedClock) videoTrack = clockedTrackFor(videoTrack);
+    else releaseClockedTrack();
 
     if (videoTrack) newStream.addTrack(videoTrack);
     // The effect re-runs on unrelated identity changes; log once per selection.
