@@ -109,7 +109,9 @@ export const diffSamples = (before, after, reference = before) => {
   const nowSending = layerState(after);
   nowSending.forEach((layer, rid) => {
     const previous = wasSending.get(rid);
-    if (!previous || previous.sending === layer.sending) return;
+    // null is "not known yet" (no interval to measure), which is not a transition.
+    if (!previous || previous.sending == null || layer.sending == null) return;
+    if (previous.sending === layer.sending) return;
     add(layer.sending ? 'info' : 'error',
       layer.sending
         ? `simulcast rung "${rid}" started sending`
@@ -121,6 +123,15 @@ export const diffSamples = (before, after, reference = before) => {
 };
 
 const DRIFTING = ['latency', 'rtt', 'bitrate'];
+
+// The figure each drifting metric is measured by, as diffSamples reads it.
+const DRIFT_VALUE = {
+  latency: (sample) => sample.estimatedLatencyMs,
+  rtt: (sample) => sample.rttMs,
+  bitrate: (sample) => (sample.isReceiving ? sample.inboundKbps : sample.outboundKbps),
+};
+
+const isKnown = (value) => value !== null && value !== undefined;
 
 /** Stateful wrapper: feed it each sample, it logs the transitions through the injected `log`. */
 export const createStatsWatcher = (role, log) => {
@@ -154,8 +165,16 @@ export const createStatsWatcher = (role, log) => {
       .filter((event) => !DRIFTING.includes(event.metric))
       .forEach(emit);
 
+    /*
+     * A reference moves when it produced a line, and also while it holds no figure: the first
+     * sample has no rate (there is no earlier report) and often no round trip yet, and a null
+     * baseline compares as "no change" forever. The first real figure becomes the baseline.
+     */
     DRIFTING.forEach((metric) => {
-      if (reported.has(metric) || !references[metric]) references[metric] = sample;
+      const reference = references[metric];
+      if (reported.has(metric) || !reference || !isKnown(DRIFT_VALUE[metric](reference))) {
+        references[metric] = sample;
+      }
     });
 
     previous = sample;

@@ -3,9 +3,11 @@
 import { addIceServers } from "../utils/IceServersUtils";
 import { applyVideoCodecPreference, isVideoCodecOfferable } from "../utils/CodecUtils";
 import { describeRejectedVideo, videoWasRejected } from "../utils/SdpAnswerUtils";
-import { describeSignalingError, instrumentPeerConnection, instrumentTrack, instrumentWebSocket, isWebSocketClosing, logEvent, loggedFetch } from "../diagnostics/signalLog";
+import { describeSignalingError, instrumentPeerConnection, instrumentWebSocket, isWebSocketClosing, logEvent, loggedFetch } from "../diagnostics/signalLog";
 import { validateParams } from "../utils/ValidationUtils";
+import { isNoVideoSelection } from "../utils/VideoTrackUtils";
 import { keepUntilStopped, releaseSessionHandles } from "./sessionHandles";
+import { watchSentTrack } from "./sentTrackWatch";
 import { releasePeerConnection } from "../diagnostics/connections";
 import {
   SIMULCAST_REJECTED_MESSAGE,
@@ -120,7 +122,7 @@ const armEncodedStreams = (session, publishSettings) => {
 const addVideoSender = (peerConnection, videoTrack, publishSettings, session) => {
   // A publish with no video still reaches "connected" and shows LIVE, so say so here.
   // Error only when a camera was chosen and no track came out; "None" is a choice.
-  const cameraChosen = Boolean(publishSettings.videoTrack1DeviceId);
+  const cameraChosen = !isNoVideoSelection(publishSettings.videoTrack1DeviceId);
   logEvent(
     videoTrack == null && cameraChosen ? 'error' : 'info',
     'pc',
@@ -133,7 +135,8 @@ const addVideoSender = (peerConnection, videoTrack, publishSettings, session) =>
   if (videoTrack == null) return undefined;
 
   // A muted or ended capture track is the usual cause of a quiet publish; see instrumentTrack.
-  keepUntilStopped(peerConnection, instrumentTrack(videoTrack, 'publish', 'outbound'));
+  // The watch moves with the sender's track when replaceVideoTrack swaps it.
+  watchSentTrack(peerConnection, 'video', videoTrack, 'publish');
 
   const sender = publishSettings.useSimulcast
     ? addSimulcastVideoSender(peerConnection, videoTrack, publishSettings.simulcastRenditions)
@@ -353,7 +356,7 @@ const websocketOnOpen = (publishSettings, websocket, callbacks, session) => {
     let audioSender = undefined;
     let videoSender = undefined;
     if (publishSettings.audioTrack != null) {
-      keepUntilStopped(peerConnection, instrumentTrack(publishSettings.audioTrack, 'publish', 'outbound'));
+      watchSentTrack(peerConnection, 'audio', publishSettings.audioTrack, 'publish');
       audioSender = peerConnection.addTrack(publishSettings.audioTrack);
     }
     videoSender = addVideoSender(peerConnection, publishSettings.videoTrack, publishSettings, session);
@@ -587,7 +590,7 @@ const startPublishWhip = async (publishSettings, session, callbacks) => {
     let videoSender;
 
     if (publishSettings.audioTrack != null) {
-      keepUntilStopped(peerConnection, instrumentTrack(publishSettings.audioTrack, 'publish', 'outbound'));
+      watchSentTrack(peerConnection, 'audio', publishSettings.audioTrack, 'publish');
       audioSender = peerConnection.addTrack(publishSettings.audioTrack);
     }
 

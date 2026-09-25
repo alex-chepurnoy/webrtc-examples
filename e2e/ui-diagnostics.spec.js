@@ -86,45 +86,47 @@ test.describe('simulcast renditions', () => {
 
   test('the player lists the renditions the Engine is carrying', async ({ browser }) => {
     // Two pages: leaving the publish route tears the publish down. Every page opened here is
-    // closed at the end, or leftover pages exhaust the fake capture device for later suites.
+    // closed however the test ends, or leftover pages exhaust the fake capture device for
+    // later suites.
     const publisher = await browser.newPage();
     const viewer = await browser.newPage();
+    try {
+      await publisher.goto('/#/publish');
+      await requireEngine(publisher, test);
 
-    await publisher.goto('/#/publish');
-    await requireEngine(publisher, test);
+      const streamName = uniqueStream('rend');
+      await waitForCamera(publisher);
+      await openTab(publisher, 'Source');
+      await publisher.locator('#publishUseSimulcast').check();
+      await openTab(publisher, 'Connection');
+      await startPublishing(publisher, { streamName });
+      await expectLive(publisher);
 
-    const streamName = uniqueStream('rend');
-    await waitForCamera(publisher);
-    await openTab(publisher, 'Source');
-    await publisher.locator('#publishUseSimulcast').check();
-    await openTab(publisher, 'Connection');
-    await startPublishing(publisher, { streamName });
-    await expectLive(publisher);
+      await viewer.goto('/#/play');
+      await viewer.fill('#playSignalingURL', SIGNALING_URL);
+      await viewer.fill('#playApplicationName', APPLICATION);
+      await viewer.fill('#playStreamName', streamName);
 
-    await viewer.goto('/#/play');
-    await viewer.fill('#playSignalingURL', SIGNALING_URL);
-    await viewer.fill('#playApplicationName', APPLICATION);
-    await viewer.fill('#playStreamName', streamName);
+      const select = viewer.locator('#playRendition');
 
-    const select = viewer.locator('#playRendition');
+      // The lower renditions appear a moment after the ingest is live, so retry the lookup.
+      await expect(async () => {
+        await viewer.click('#play-find-renditions');
+        await expect(select).toBeEnabled({ timeout: 3_000 });
+      }).toPass({ timeout: 30_000 });
 
-    // The lower renditions appear a moment after the ingest is live, so retry the lookup.
-    await expect(async () => {
-      await viewer.click('#play-find-renditions');
-      await expect(select).toBeEnabled({ timeout: 3_000 });
-    }).toPass({ timeout: 30_000 });
+      const labels = await select.locator('option').allTextContents();
+      expect(labels[0]).toMatch(/source/i);
+      expect(labels.join(' ')).toMatch(/"m"/);
+      expect(labels.join(' ')).toMatch(/"l"/);
 
-    const labels = await select.locator('option').allTextContents();
-    expect(labels[0]).toMatch(/source/i);
-    expect(labels.join(' ')).toMatch(/"m"/);
-    expect(labels.join(' ')).toMatch(/"l"/);
-
-    // Choosing a rendition is choosing the stream it plays.
-    await select.selectOption(`${streamName}_m`);
-    await expect(viewer.locator('#playStreamName')).toHaveValue(`${streamName}_m`);
-
-    await publisher.close();
-    await viewer.close();
+      // Choosing a rendition is choosing the stream it plays.
+      await select.selectOption(`${streamName}_m`);
+      await expect(viewer.locator('#playStreamName')).toHaveValue(`${streamName}_m`);
+    } finally {
+      await publisher.close();
+      await viewer.close();
+    }
   });
 });
 
@@ -202,47 +204,48 @@ test.describe('renditions over WHEP', () => {
   test('the renditions are found from a WHEP origin', async ({ browser }) => {
     const publisher = await browser.newPage();
     const viewer = await browser.newPage();
+    try {
+      await publisher.goto('/#/publish');
+      await requireEngine(publisher, test);
 
-    await publisher.goto('/#/publish');
-    await requireEngine(publisher, test);
+      const streamName = uniqueStream('whep');
+      await waitForCamera(publisher);
+      await openTab(publisher, 'Source');
+      await publisher.locator('#publishUseSimulcast').check();
+      await openTab(publisher, 'Connection');
+      await startPublishing(publisher, { streamName, useWhip: true });
+      await expectLive(publisher);
 
-    const streamName = uniqueStream('whep');
-    await waitForCamera(publisher);
-    await openTab(publisher, 'Source');
-    await publisher.locator('#publishUseSimulcast').check();
-    await openTab(publisher, 'Connection');
-    await startPublishing(publisher, { streamName, useWhip: true });
-    await expectLive(publisher);
+      await viewer.goto('/#/play');
+      await viewer.locator('#playUseWhep').check();
+      await viewer.fill('#playSignalingURL', httpOrigin());
+      await viewer.fill('#playApplicationName', APPLICATION);
+      await viewer.fill('#playStreamName', streamName);
 
-    await viewer.goto('/#/play');
-    await viewer.locator('#playUseWhep').check();
-    await viewer.fill('#playSignalingURL', httpOrigin());
-    await viewer.fill('#playApplicationName', APPLICATION);
-    await viewer.fill('#playStreamName', streamName);
+      const find = viewer.locator('#play-find-renditions');
+      await expect(find).toBeEnabled();
 
-    const find = viewer.locator('#play-find-renditions');
-    await expect(find).toBeEnabled();
+      const select = viewer.locator('#playRendition');
+      await expect(async () => {
+        await find.click();
+        await expect(select).toBeEnabled({ timeout: 3_000 });
+      }).toPass({ timeout: 30_000 });
 
-    const select = viewer.locator('#playRendition');
-    await expect(async () => {
-      await find.click();
-      await expect(select).toBeEnabled({ timeout: 3_000 });
-    }).toPass({ timeout: 30_000 });
+      const labels = (await select.locator('option').allTextContents()).join(' ');
+      expect(labels).toMatch(/source/i);
+      expect(labels).toMatch(/"m"/);
 
-    const labels = (await select.locator('option').allTextContents()).join(' ');
-    expect(labels).toMatch(/source/i);
-    expect(labels).toMatch(/"m"/);
-
-    // The chosen rendition plays back over WHEP.
-    await select.selectOption(`${streamName}_m`);
-    await viewer.click('#play-toggle');
-    await expectPlaying(viewer);
-    await viewer.waitForFunction(
-      () => { const v = document.querySelector('#player-video'); return v && v.videoWidth > 0; },
-      null, { timeout: 20_000 });
-
-    await publisher.close();
-    await viewer.close();
+      // The chosen rendition plays back over WHEP.
+      await select.selectOption(`${streamName}_m`);
+      await viewer.click('#play-toggle');
+      await expectPlaying(viewer);
+      await viewer.waitForFunction(
+        () => { const v = document.querySelector('#player-video'); return v && v.videoWidth > 0; },
+        null, { timeout: 20_000 });
+    } finally {
+      await publisher.close();
+      await viewer.close();
+    }
   });
 });
 
@@ -253,34 +256,56 @@ test.describe('renditions over WHEP', () => {
 test.describe('simulcast layers', () => {
   test('every rung is listed, with what it is doing', async ({ browser }) => {
     const page = await browser.newPage();
-    await page.goto('/#/publish');
-    await requireEngine(page, test);
+    try {
+      await page.goto('/#/publish');
+      await requireEngine(page, test);
 
-    const streamName = uniqueStream('rungs');
-    await waitForCamera(page);
-    await openTab(page, 'Source');
-    await page.locator('#publishUseSimulcast').check();
-    await openTab(page, 'Connection');
-    await startPublishing(page, { streamName });
-    await expectLive(page);
+      const streamName = uniqueStream('rungs');
+      await waitForCamera(page);
+      await openTab(page, 'Source');
+      await page.locator('#publishUseSimulcast').check();
+      await openTab(page, 'Connection');
+      await startPublishing(page, { streamName });
+      await expectLive(page);
 
-    const table = page.locator('#simulcast-layers');
-    await expect(table).toBeVisible({ timeout: 20_000 });
+      const table = page.locator('#simulcast-layers');
+      await expect(table).toBeVisible({ timeout: 20_000 });
 
-    // One row per configured rendition, named by its rid.
-    for (const rid of ['h', 'm', 'l']) {
-      await expect(table.getByRole('rowheader', { name: rid, exact: true })).toBeVisible();
+      // One row per configured rendition, named by its rid.
+      for (const rid of ['h', 'm', 'l']) {
+        await expect(table.getByRole('rowheader', { name: rid, exact: true })).toBeVisible();
+      }
+
+      /*
+       * Each row's state has to agree with its own rate, read from the same render: a rung
+       * moving bytes says sending, one that is not says idle, and the summary counts the
+       * sending rows. A state taken from the session byte total said sending at 0 kbps.
+       */
+      await expect(async () => {
+        const read = await table.evaluate((el) => ({
+          rows: [...el.querySelectorAll('tbody tr')].map((tr) => ({
+            rate: tr.children[2].textContent.trim(),
+            state: tr.children[4].textContent.trim(),
+          })),
+          summary: el.querySelector('.wz-layers__summary').textContent,
+        }));
+        expect(read.rows).toHaveLength(3);
+        for (const { rate, state } of read.rows) {
+          const kbps = Number.parseFloat(rate);
+          if (state === 'sending') {
+            expect(kbps, `a sending rung reads ${rate}`).toBeGreaterThan(0);
+          } else {
+            expect(state).toMatch(/^idle/);
+            expect(Number.isNaN(kbps) || kbps === 0, `an idle rung reads ${rate}`).toBe(true);
+          }
+        }
+        const sending = read.rows.filter((r) => r.state === 'sending').length;
+        expect(sending).toBeGreaterThan(0);
+        expect(read.summary).toContain(`${sending} of 3 sending`);
+      }).toPass({ timeout: 10_000 });
+    } finally {
+      await page.close();
     }
-
-    // Each row says either that it is sending or why it is not; neither may be blank.
-    const states = await table.locator('tbody tr td:last-child').allTextContents();
-    expect(states).toHaveLength(3);
-    for (const state of states) {
-      expect(state.trim()).toMatch(/^(sending|idle)/);
-    }
-
-    await expect(table.locator('.wz-layers__summary')).toContainText(/of 3 sending/);
-    await page.close();
   });
 
   test('an ordinary publish shows no layer table at all', async ({ page }) => {
@@ -354,12 +379,21 @@ test.describe('stat groups', () => {
 
 test.describe('rendition hint', () => {
 
+  // With a server entered under each, so the lookup wording is what gets compared, not the
+  // "enter a server first" text both show when the field is empty.
   test('reads the same under either transport', async ({ page }) => {
     await page.goto('/#/play');
     const hint = page.locator('#playRendition-hint');
 
+    await page.fill('#playSignalingURL', 'wss://engine.example/webrtc-session.json');
+    await page.fill('#playStreamName', 'someStream');
+    await expect(page.locator('#play-find-renditions')).toBeEnabled();
     const wss = await hint.textContent();
+    expect(wss).not.toContain('Enter the server URL first');
+
     await page.locator('#playUseWhep').check();
+    await page.fill('#playSignalingURL', 'https://engine.example');
+    await expect(page.locator('#play-find-renditions')).toBeEnabled();
     expect(await hint.textContent()).toBe(wss);
   });
 

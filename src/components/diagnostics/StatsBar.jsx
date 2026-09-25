@@ -27,11 +27,16 @@ const Tile = ({ label, value, sub, tone = 'unknown', title, history, format, spa
     <div className="wz-stat__label">{label}</div>
     <div className="wz-stat__row">
       <span className="wz-stat__value">{value}</span>
-      {history ? <Sparkline points={history} format={format} ariaLabel={sparkLabel || label} /> : null}
+      {history ? (
+        <Sparkline points={history.values} times={history.times} format={format} ariaLabel={sparkLabel || label} />
+      ) : null}
     </div>
     {sub ? <div className="wz-stat__sub">{sub}</div> : null}
   </div>
 );
+
+// How the local end of the active candidate pair reaches the Engine.
+const PATH = { host: 'direct', srflx: 'via NAT', prflx: 'via NAT', relay: 'relayed' };
 
 // aria-label names the tile row itself, so the group is addressable.
 const Group = ({ title, children }) => (
@@ -41,9 +46,10 @@ const Group = ({ title, children }) => (
   </section>
 );
 
+// Values keep their nulls and their sample times, so a gap is drawn as a gap.
 const seriesOf = (history, key) =>
   Array.isArray(history) && history.length > 1
-    ? history.map((h) => (h ? h[key] : null))
+    ? { values: history.map((h) => (h ? h[key] : null)), times: history.map((h) => (h ? h.at : null)) }
     : null;
 
 // role comes from the page, not the stats: a player not yet connected is not receiving.
@@ -82,9 +88,11 @@ const StatsBar = ({ stats, history, connectionState, role = 'publish' }) => {
         <Tile
           label="Round trip"
           value={fmt(s.rttMs, 0, ' ms')}
-          sub="measured"
+          sub={PATH[s.localCandidateType] ? `measured, ${PATH[s.localCandidateType]}` : 'measured'}
           tone={band(s.rttMs, 60, 150)}
-          title="Round trip time on the active ICE candidate pair, as reported by the browser."
+          title={'Round trip time on the active ICE candidate pair, as reported by the browser. '
+            + 'The note beneath says how media reaches the Engine: direct, through a NAT, or '
+            + 'relayed through a TURN server, which adds its own leg to the round trip.'}
           history={seriesOf(history, 'rttMs')}
           format={(v) => `${v.toFixed(0)} ms`}
           sparkLabel="Round trip time over the last minute"
@@ -145,10 +153,12 @@ const StatsBar = ({ stats, history, connectionState, role = 'publish' }) => {
         />
         <Tile
           label="Video bitrate"
-          value={fmt(s.inboundKbps ?? s.outboundKbps, 0, ' kbps')}
+          value={connectionState === 'connected' && s.hasVideo === false ? 'none' : fmt(s.videoKbps, 0, ' kbps')}
           sub={receiving ? 'inbound' : 'outbound'}
-          title="Derived from the byte counter delta between the last two samples. On a simulcast publish this is every encoding added together."
-          history={seriesOf(history, receiving ? 'inboundKbps' : 'outboundKbps')}
+          title={'Derived from the byte counter delta between the last two samples. On a simulcast '
+            + 'publish this is every encoding added together. "none" means the connection carries '
+            + 'no video; the audio rate has its own tile.'}
+          history={seriesOf(history, 'videoKbps')}
           format={(v) => `${v.toFixed(0)} kbps`}
           sparkLabel="Video bitrate over the last minute"
         />

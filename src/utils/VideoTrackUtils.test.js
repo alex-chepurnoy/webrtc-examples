@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import { CAMERA_SOURCE_KEY, cameraTrackOf, selectPublishVideoTrack } from './VideoTrackUtils';
+import {
+  CAMERA_SOURCE_KEY, cameraTrackOf, isNoVideoSelection, selectPublishVideoTrack,
+} from './VideoTrackUtils';
 
 const trackA = { id: 'a' };
 const trackB = { id: 'b' };
@@ -39,6 +41,39 @@ describe('selectPublishVideoTrack', () => {
     expect(selectPublishVideoTrack({ camA: trackA }, '', null).usedFallback).toBe(false);
   });
 
+  // A screen share that ends mid-publish sets the selection to 'none'. Falling back from it
+  // put the webcam on air without anyone choosing it.
+  it("treats 'none' as no video, never as a camera to fall back from", () => {
+    const r = selectPublishVideoTrack({ camA: trackA, camB: trackB }, 'none', null);
+    expect(r.track).toBeNull();
+    expect(r.usedFallback).toBe(false);
+  });
+
+  it("treats 'none' as no video even with a screen track still in state", () => {
+    expect(selectPublishVideoTrack({ camA: trackA }, 'none', screen).track).toBeNull();
+  });
+
+  it('treats a null or undefined selection as no video', () => {
+    expect(selectPublishVideoTrack({ camA: trackA }, null, null).track).toBeNull();
+    expect(selectPublishVideoTrack({ camA: trackA }, undefined, null).track).toBeNull();
+  });
+
+  it('never falls back to an ended track', () => {
+    const ended = { id: 'ended', readyState: 'ended' };
+    const live = { id: 'live', readyState: 'live' };
+    const r = selectPublishVideoTrack({ camA: ended, camB: live }, 'camMissing', null);
+    expect(r.track).toBe(live);
+    expect(r.usedFallback).toBe(true);
+    expect(selectPublishVideoTrack({ camA: ended }, 'camMissing', null).track).toBeNull();
+  });
+
+  it('falls back past the selected camera when its own track has ended', () => {
+    const ended = { id: 'ended', readyState: 'ended' };
+    const r = selectPublishVideoTrack({ camA: ended, camB: trackB }, 'camA', null);
+    expect(r.track).toBe(trackB);
+    expect(r.usedFallback).toBe(true);
+  });
+
   it('tolerates a missing map', () => {
     expect(selectPublishVideoTrack(undefined, 'camA', null).track).toBeNull();
     expect(selectPublishVideoTrack(null, 'camA', null).track).toBeNull();
@@ -47,6 +82,13 @@ describe('selectPublishVideoTrack', () => {
   it('never returns a fallback flag when it returns no track', () => {
     const r = selectPublishVideoTrack({}, 'nope', null);
     expect(r.track === null && r.usedFallback === false).toBe(true);
+  });
+});
+
+describe('isNoVideoSelection', () => {
+  it('knows the selections that mean no video', () => {
+    ['', 'none', null, undefined].forEach((id) => expect(isNoVideoSelection(id)).toBe(true));
+    ['camA', 'screen'].forEach((id) => expect(isNoVideoSelection(id)).toBe(false));
   });
 });
 

@@ -212,6 +212,8 @@
 .wz-debug__row--error { background: color-mix(in srgb, var(--wz-danger) 10%, transparent); }
 .wz-debug__row--error .wz-debug__arrow,
 .wz-debug__row--error .wz-debug__label { color: var(--wz-danger); }
+.wz-debug__row--warn { background: color-mix(in srgb, var(--wz-warning) 10%, transparent); }
+.wz-debug__row--warn .wz-debug__arrow { color: var(--wz-warning); }
 
 .wz-debug__chan {
   flex: none;

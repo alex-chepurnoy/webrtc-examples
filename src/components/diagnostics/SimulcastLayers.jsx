@@ -3,7 +3,8 @@ import { useSelector } from 'react-redux';
 
 /*
  * Per-rendition readout for a simulcast publish. An idle layer is normal (Chromium drops
- * encodings bandwidth will not carry), so the reason is shown beside it.
+ * encodings bandwidth will not carry), so the reason is shown beside it. Sending means bytes
+ * left over the last interval, so a rung the browser has turned off reads idle at once.
  *
  * Rungs are ordered from the configuration, highest first: the browser omits
  * scaleResolutionDownBy on outbound-rtp, so an idle rung has no size to rank by.
@@ -13,6 +14,28 @@ const fmt = (value, digits = 0, suffix = '') =>
   value === null || value === undefined || Number.isNaN(value)
     ? '\u2014'
     : `${value.toFixed(digits)}${suffix}`;
+
+// sending is null until two samples exist to tell whether bytes are leaving.
+const LayerState = ({ layer }) => {
+  if (layer.sending == null) {
+    return (
+      <span className="wz-layers__state" title="Needs a second sample to tell whether bytes are leaving.">
+        measuring
+      </span>
+    );
+  }
+  if (layer.sending) return <span className="wz-layers__state wz-layers__state--on">sending</span>;
+  return (
+    <span
+      className="wz-layers__state wz-layers__state--off"
+      title={layer.limitedBy
+        ? `The browser is not encoding this layer; it reports ${layer.limitedBy} as the limit.`
+        : 'Configured, but the browser is not encoding it.'}
+    >
+      {layer.limitedBy ? `idle (${layer.limitedBy})` : 'idle'}
+    </span>
+  );
+};
 
 const SimulcastLayers = ({ layers, totalKbps }) => {
   const renditions = useSelector((state) => state.publishSettings.simulcastRenditions);
@@ -37,7 +60,7 @@ const SimulcastLayers = ({ layers, totalKbps }) => {
     return size(b) - size(a);
   });
 
-  const sending = layers.filter((l) => l.sending).length;
+  const sending = layers.filter((l) => l.sending === true).length;
 
   return (
     <div className="wz-layers" id="simulcast-layers">
@@ -61,7 +84,7 @@ const SimulcastLayers = ({ layers, totalKbps }) => {
         </thead>
         <tbody>
           {ordered.map((layer) => (
-            <tr key={layer.rid} className={layer.sending ? '' : 'wz-layers__row--idle'}>
+            <tr key={layer.rid} className={layer.sending === false ? 'wz-layers__row--idle' : ''}>
               <th scope="row">{layer.rid}</th>
               <td>
                 {layer.frameWidth && layer.frameHeight
@@ -70,20 +93,7 @@ const SimulcastLayers = ({ layers, totalKbps }) => {
               </td>
               <td>{fmt(layer.kbps, 0, ' kbps')}</td>
               <td>{layer.framesPerSecond ? Math.round(layer.framesPerSecond) : '\u2014'}</td>
-              <td>
-                {layer.sending
-                  ? <span className="wz-layers__state wz-layers__state--on">sending</span>
-                  : (
-                    <span
-                      className="wz-layers__state wz-layers__state--off"
-                      title={layer.limitedBy
-                        ? `The browser is not encoding this layer; it reports ${layer.limitedBy} as the limit.`
-                        : 'Configured, but the browser is not encoding it.'}
-                    >
-                      {layer.limitedBy ? `idle (${layer.limitedBy})` : 'idle'}
-                    </span>
-                  )}
-              </td>
+              <td><LayerState layer={layer} /></td>
             </tr>
           ))}
         </tbody>

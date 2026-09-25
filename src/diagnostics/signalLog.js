@@ -19,7 +19,7 @@ export const clearLog = () => store.set([]);
 export const getEntries = store.get;
 
 /**
- * direction: 'out' | 'in' | 'info' | 'error'
+ * direction: 'out' | 'in' | 'info' | 'warn' | 'error'
  * channel:   'ws' | 'http' | 'ice' | 'pc'
  */
 export const logEvent = (direction, channel, label, detail) => {
@@ -38,6 +38,26 @@ export const logEvent = (direction, channel, label, detail) => {
     : [...entries, entry]);
 };
 
+/*
+ * Fields that authorize a session. A play OFFER and every play CANDIDATE carry secureToken,
+ * and the panel's Copy button puts whatever is logged on the clipboard, so these are masked
+ * before a frame is recorded. The frame sent to the Engine is untouched.
+ */
+const SENSITIVE_KEY = /^(securetoken|authtoken|token|accesstoken|refreshtoken|secret|password|passwd|authorization|apikey|api_key|hash)$/i;
+
+export const REDACTED = '[redacted]';
+
+/** A copy of value with every sensitive field masked, at any depth. */
+export const redactSecrets = (value) => {
+  if (Array.isArray(value)) return value.map(redactSecrets);
+  if (value === null || typeof value !== 'object') return value;
+  const out = {};
+  for (const [key, inner] of Object.entries(value)) {
+    out[key] = SENSITIVE_KEY.test(key) && inner != null && inner !== '' ? REDACTED : redactSecrets(inner);
+  }
+  return out;
+};
+
 const summarize = (raw) => {
   if (typeof raw !== 'string') return { label: typeof raw, detail: raw };
   try {
@@ -51,7 +71,7 @@ const summarize = (raw) => {
       (parsed.iceCandidates || parsed.candidate ? 'iceCandidate' : null) ||
       (parsed.statusCode ? `status ${parsed.statusCode}` : null) ||
       'message';
-    return { label, detail: parsed };
+    return { label, detail: redactSecrets(parsed) };
   } catch {
     return { label: 'text', detail: raw.length > 2000 ? `${raw.slice(0, 2000)}...` : raw };
   }
@@ -213,10 +233,27 @@ export const instrumentTrack = (track, role, direction) => {
     documentVisibility: typeof document === 'undefined' ? null : document.visibilityState,
   });
 
+  /*
+   * A track the page stops itself (a camera switch, which on mobile has to close the old
+   * camera first) is not a failure, and some browsers still fire ended for it. stop() is
+   * wrapped so that case reads as what it is.
+   */
+  let stoppedByPage = false;
+  const hadOwnStop = Object.prototype.hasOwnProperty.call(track, 'stop');
+  const originalStop = track.stop;
+  if (typeof originalStop === 'function') {
+    track.stop = (...args) => {
+      stoppedByPage = true;
+      return originalStop.apply(track, args);
+    };
+  }
+
   const listeners = {
     mute: () => logEvent('error', 'pc', `${role} ${direction} ${track.kind} track muted by the browser`, describe()),
     unmute: () => logEvent('info', 'pc', `${role} ${direction} ${track.kind} track resumed`, describe()),
-    ended: () => logEvent('error', 'pc', `${role} ${direction} ${track.kind} track ended`, describe()),
+    ended: () => (stoppedByPage
+      ? logEvent('info', 'pc', `${role} ${direction} ${track.kind} track stopped by the page`, describe())
+      : logEvent('error', 'pc', `${role} ${direction} ${track.kind} track ended`, describe())),
   };
   for (const [type, fn] of Object.entries(listeners)) track.addEventListener(type, fn);
 
@@ -225,6 +262,10 @@ export const instrumentTrack = (track, role, direction) => {
   return {
     stop: () => {
       for (const [type, fn] of Object.entries(listeners)) track.removeEventListener(type, fn);
+      if (typeof originalStop === 'function') {
+        if (hadOwnStop) track.stop = originalStop;
+        else delete track.stop;
+      }
       delete track.__wzInstrumented;
     },
   };
