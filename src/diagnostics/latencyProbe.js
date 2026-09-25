@@ -1,20 +1,36 @@
 /*
  * The latency probe: how long a frame takes from the publisher's encoder to the player's
- * screen, and how much of that the Engine owns.
+ * screen, split at the point where this browser reads the frame off the wire.
  *
  * Every encoded frame carries a sequence number and send time as an H.264 SEI NAL (see
  * utils/frameStamp.js), read on the receiver before decode and joined to the presented frame
  * by rtpTimestamp:
  *
- *   camera -> encode ->| SEI written |-> Engine -> depacketize |<- SEI read ->| decode -> display
- *                            t0                                      t1                     t2
+ *   encode ->| SEI written |-> pace, network, Engine, network -> assemble |<- SEI read ->|
+ *                  t0                                                          t1
+ *        -> frame buffer (jitter buffer wait) -> decode -> display
+ *                                                             t2
  *
- *   t1 - t0   transport: packetize, network, Engine, jitter buffer, depacketize (the Engine figure)
- *   t2 - t1   player: decode, compositor, wait until scheduled for display
+ *   t1 - t0   transport: publisher pacing and packetizing, both network legs, the Engine, and
+ *             the wait for the frame's packets to arrive (retransmissions included)
+ *   t2 - t1   player: the jitter buffer wait, decode, compositor, wait until scheduled for display
  *   t2 - t0   end to end, minus capture and encode
+ *
+ * Where t1 falls was read from libwebrtc (video/rtp_video_stream_receiver2.cc): the receive-side
+ * frame transformer runs in OnAssembledFrame, once the packet buffer has a whole frame, and hands
+ * the frame on to the reference finder and then VideoReceiveStream2::OnCompleteFrame, which
+ * inserts it into VideoStreamBufferController, the frame buffer that holds it until its render
+ * time. So the jitter buffer wait is in the player leg, not the transport leg. On the sender the
+ * transform runs before packetization, so pacing is in the transport leg.
  *
  * Not included: sensor and ISP delay, the encoder queue, and panel emission. expectedDisplayTime
  * is a prediction, not an observation.
+ *
+ * The transforms run on the main thread (createEncodedStreams). A busy main thread on the player
+ * delays the moment t1 is read, which moves that delay from the player leg into the transport
+ * leg; the total is unaffected. On the publisher it delays t0, which hides the delay from both.
+ * Moving them to a worker (RTCRtpScriptTransform, or transferring the encoded streams) is not
+ * done here.
  *
  * Structure: everything above the "browser plumbing" line is pure and unit tested. Below it are
  * the two encoded-stream transforms, the video-frame callback and the clock data channel.
@@ -25,15 +41,18 @@
 import {
   MAX_RUNG,
   MAX_SEQUENCE,
-  buildSeiPayload,
   findSeiPayload,
+  insertStamp,
+  stampInsertionOffset,
 } from '../utils/frameStamp';
 import attachDataChannel from '../webrtc/attachDataChannel';
 import {
   CLOCK_GRANULARITY_MS,
   MAX_TRUSTED_UNCERTAINTY_MS,
   MIN_SAMPLES,
+  TIMER_RESOLUTION_MS,
   WINDOW_SAMPLES,
+  countUsableSamples,
   estimateOffset,
 } from './clockSync';
 import { logEvent } from './signalLog';
@@ -51,7 +70,8 @@ const SEQUENCE_SPACE = MAX_SEQUENCE + 1;
 export const FRAME_WINDOW = 120;
 
 // No stamped frame for this long means the stream stopped. Kept short so a stall shows as
-// stale rather than as a frozen figure.
+// stale rather than as a frozen figure. The panel reads the status this produces, so there is
+// one threshold, not two.
 export const STALE_MS = 1000;
 
 /* ------------------------------------------------------------------ pure logic ------------- */
@@ -89,8 +109,8 @@ export const decideStamping = (mimeType, wanted) => {
 export const countMissedFrames = (previous, sequence) => {
   if (!Number.isInteger(previous) || !Number.isInteger(sequence)) return 0;
   const gap = (sequence - previous + SEQUENCE_SPACE) % SEQUENCE_SPACE;
-  // More than half the space forward is a wrap seen backwards: reordering, not lost frames.
-  if (gap === 0 || gap > SEQUENCE_SPACE / 2) return 0;
+  // Half the space forward or more is a wrap seen backwards: reordering, not lost frames.
+  if (gap === 0 || gap >= SEQUENCE_SPACE / 2) return 0;
   return gap - 1;
 };
 
@@ -120,16 +140,13 @@ export const rungIndexFor = (indices, key) => {
 };
 
 /**
- * An encoded frame with the stamp prepended, as a fresh ArrayBuffer. The SEI is a NAL of its
- * own, so the existing bitstream is untouched and the decoder may ignore it.
+ * An encoded frame with the stamp inserted in front of its first slice, as a fresh ArrayBuffer,
+ * or null when the bytes do not parse as H.264 (see insertStamp). The SEI is a NAL of its own,
+ * so the existing bitstream is untouched and the decoder may ignore it.
  */
 export const stampFrameBytes = (frameData, { sequence, sentAt, rung = 0 }) => {
-  const sei = buildSeiPayload({ sequence, sentAt, rung });
-  const frameBytes = new Uint8Array(frameData);
-  const stamped = new Uint8Array(sei.length + frameBytes.length);
-  stamped.set(sei, 0);
-  stamped.set(frameBytes, sei.length);
-  return stamped.buffer;
+  const stamped = insertStamp(new Uint8Array(frameData), { sequence, sentAt, rung });
+  return stamped === null ? null : stamped.buffer;
 };
 
 /**
@@ -146,34 +163,48 @@ export const median = (values) => {
 /**
  * What the clock exchange currently supports. Zero never stands in for "unknown": state 'ok'
  * with offsetMs 0 is a measurement, state 'unknown' is a refusal.
+ *
+ * `sameContext` is a proven topology, not a guess: the caller sets it only when every frame in
+ * the window is one this page stamped itself (see isOwnFrame). Both timestamps then come from
+ * one Date.now in one JavaScript context, so the offset is exactly zero whatever the clock
+ * exchange estimates, and the only error left is the resolution of Date.now.
  */
 export const describeClock = (samples, { sameContext = false } = {}) => {
-  const count = Array.isArray(samples) ? samples.length : 0;
+  const usable = countUsableSamples(samples);
+
+  if (sameContext) {
+    return {
+      state: 'ok',
+      offsetMs: 0,
+      uncertaintyMs: TIMER_RESOLUTION_MS,
+      samples: usable,
+      mode: 'same-context',
+      exact: true,
+      warming: false,
+      reason: null,
+    };
+  }
+
   const estimate = estimateOffset(samples);
 
   if (estimate === null) {
+    // Too few usable samples is the normal first few seconds, not a failure.
+    const warming = usable < MIN_SAMPLES;
     return {
       state: 'unknown',
       offsetMs: null,
       uncertaintyMs: null,
-      samples: count,
+      samples: usable,
       mode: null,
       exact: false,
-      reason: count < MIN_SAMPLES
-        ? `Exchanging clock samples (${count} of ${MIN_SAMPLES}).`
+      warming,
+      reason: warming
+        ? `Exchanging clock samples (${usable} of ${MIN_SAMPLES}).`
         : 'The clock offset is not stable enough to measure.',
     };
   }
 
-  /*
-   * A page that both stamps and reads has one clock, and the bound only describes the round trip
-   * through the Engine, which can exceed the trusted limit. The offset must still be zero: if the
-   * page plays somebody else's stream, the offset shows the different clock.
-   */
-  const oneClockByConstruction = sameContext
-    && Math.abs(estimate.offsetMs) <= CLOCK_GRANULARITY_MS;
-
-  if (estimate.uncertaintyMs > MAX_TRUSTED_UNCERTAINTY_MS && !oneClockByConstruction) {
+  if (estimate.uncertaintyMs > MAX_TRUSTED_UNCERTAINTY_MS) {
     return {
       state: 'untrusted',
       offsetMs: estimate.offsetMs,
@@ -181,31 +212,55 @@ export const describeClock = (samples, { sameContext = false } = {}) => {
       samples: estimate.samples,
       mode: null,
       exact: false,
+      warming: false,
       reason: `Clock offset too uncertain to measure (± ${Math.round(estimate.uncertaintyMs)} ms).`,
     };
   }
 
   /*
    * Processes on one machine share the OS clock, so offset and bound collapse to its resolution
-   * and "exact" reads better than "0 ms plus or minus 0 ms". Only 'same-context' is a verified
-   * topology; a near-zero offset alone is 'same-clock', with no claim about where the far end runs.
+   * and "exact" reads better than "0 ms plus or minus 1 ms". This makes no claim about where the
+   * far end runs: a near-zero offset with a tiny bound says only that the two clocks agree, and
+   * it needs a round trip of about 2 ms, so in practice a local Engine.
    */
-  const sameClock = oneClockByConstruction
-    || (Math.abs(estimate.offsetMs) <= CLOCK_GRANULARITY_MS
-      && estimate.uncertaintyMs <= CLOCK_GRANULARITY_MS);
-  const mode = oneClockByConstruction
-    ? 'same-context'
-    : (sameClock ? 'same-clock' : 'cross-machine');
+  const sameClock = Math.abs(estimate.offsetMs) <= CLOCK_GRANULARITY_MS
+    && estimate.uncertaintyMs <= CLOCK_GRANULARITY_MS;
 
   return {
     state: 'ok',
     offsetMs: estimate.offsetMs,
     uncertaintyMs: estimate.uncertaintyMs,
     samples: estimate.samples,
-    mode,
+    mode: sameClock ? 'same-clock' : 'cross-machine',
     exact: sameClock,
+    warming: false,
     reason: null,
   };
+};
+
+/*
+ * How many of this page's own stamps are remembered for the proof above: about 11 s of a
+ * three-rung 30 fps publish, far longer than any frame takes to come back through the Engine.
+ */
+export const SENT_MEMORY = 1024;
+
+const sentKey = ({ rung, sequence }) => `${rung}:${sequence}`;
+
+/**
+ * Whether a received stamp is one this page wrote: the same rung and sequence with the same
+ * millisecond send time. A different publisher matching all three by accident would need its
+ * clock and sequence counter to agree with ours to the millisecond on every frame in the window.
+ */
+export const isOwnFrame = (sentStamps, stamp) =>
+  sentStamps instanceof Map && stamp != null
+  && sentStamps.get(sentKey(stamp)) === stamp.sentAt;
+
+/** Records a stamp this page wrote. `sentStamps` is mutated and kept to SENT_MEMORY entries. */
+export const recordSentStamp = (sentStamps, stamp) => {
+  const key = sentKey(stamp);
+  sentStamps.delete(key);
+  sentStamps.set(key, stamp.sentAt);
+  while (sentStamps.size > SENT_MEMORY) sentStamps.delete(sentStamps.keys().next().value);
 };
 
 /**
@@ -230,6 +285,33 @@ export const frameLatency = (record, offsetMs) => {
 };
 
 /**
+ * The three medians, taken over one set of frames so the rows describe the same frames: the
+ * frames with both legs when there are any, and otherwise whichever leg exists (the transport
+ * leg before the display join has caught up, the player leg while the clock is unknown), with
+ * the total left null because nothing can be added up. A median of sums is not the sum of the
+ * medians, so Total can still differ from the two legs added by a millisecond or two.
+ */
+export const mediansOverOneFrameSet = (perFrame) => {
+  const joined = perFrame.filter((frame) => frame.totalMs !== null);
+  if (joined.length > 0) {
+    return {
+      transportMs: median(joined.map((frame) => frame.transportMs)),
+      playerMs: median(joined.map((frame) => frame.playerMs)),
+      totalMs: median(joined.map((frame) => frame.totalMs)),
+      figureFrames: joined.length,
+    };
+  }
+  const transport = perFrame.map((frame) => frame.transportMs).filter((value) => value !== null);
+  const player = perFrame.map((frame) => frame.playerMs).filter((value) => value !== null);
+  return {
+    transportMs: median(transport),
+    playerMs: median(player),
+    totalMs: null,
+    figureFrames: Math.max(transport.length, player.length),
+  };
+};
+
+/**
  * Turns the probe's state into the object the UI subscribes to. Pure, with `now` a parameter.
  *
  *   off        nothing is running on this page
@@ -239,14 +321,15 @@ export const frameLatency = (record, offsetMs) => {
  *   measuring  there is a figure
  */
 export const summarizeProbe = (state, now) => {
-  // Same-page stamping is the only provable one-clock case, so it is passed in, not inferred.
-  const clock = describeClock(state.clockSamples, {
-    sameContext: state.senderStatus === 'stamping',
-  });
+  // Proven, not inferred: every frame in the window is one this page stamped.
+  const sameContext = state.frames.length > 0
+    && state.frames.every((record) => record.own === true);
+  const clock = describeClock(state.clockSamples, { sameContext });
   const base = {
     transportMs: null,
     playerMs: null,
     totalMs: null,
+    figureFrames: 0,
     missedFrames: state.missedFrames,
     lastSequence: state.lastSequence,
     stampedFrames: state.stampedFrames,
@@ -272,30 +355,34 @@ export const summarizeProbe = (state, now) => {
     return {
       ...base,
       status: 'no-stamp',
-      // Name all three causes, or a transcoding application reads as a broken feature.
-      reason: 'No frame stamp in this stream. The publisher has the probe off, the application '
-        + 'is transcoding, or the codec is not H.264.',
+      // Name the likely causes, or a transcoding application reads as a broken feature.
+      reason: 'No frame stamp in this stream. The publisher has the probe off, the codec is not '
+        + 'H.264, or something between the two re-encoded the video (a transcoding application, '
+        + 'for example).',
     };
   }
+
+  const offsetMs = clock.state === 'ok' ? clock.offsetMs : null;
+  const figures = mediansOverOneFrameSet(
+    state.frames.map((record) => frameLatency(record, offsetMs)),
+  );
+
+  // A stall keeps the last real figures, marked stalled, so the panel can gray them out.
   if (now - state.lastFrameAt > STALE_MS) {
     return {
       ...base,
+      ...figures,
       status: 'stalled',
       reason: `No stamped frame for ${Math.round((now - state.lastFrameAt) / 100) / 10} s.`,
     };
   }
 
-  const offsetMs = clock.state === 'ok' ? clock.offsetMs : null;
-  const perFrame = state.frames.map((record) => frameLatency(record, offsetMs));
-
   return {
     ...base,
+    ...figures,
     status: 'measuring',
     // A trusted clock is what the transport leg needs; the player leg never needed one.
     reason: clock.state === 'ok' ? null : clock.reason,
-    transportMs: median(perFrame.map((frame) => frame.transportMs)),
-    playerMs: median(perFrame.map((frame) => frame.playerMs)),
-    totalMs: median(perFrame.map((frame) => frame.totalMs)),
   };
 };
 
@@ -408,6 +495,8 @@ const createState = () => ({
   lastFrameAt: null,
   joinedFrames: 0,
   clockSamples: [],
+  // This page's own stamps, for the same-context proof. See isOwnFrame.
+  sentStamps: new Map(),
 });
 
 let state = createState();
@@ -416,15 +505,14 @@ const listeners = new Set();
 let emitTimer = null;
 
 // Emitted on a timer, not per frame, so a 60 fps stream does not mean 60 React renders a second.
-const EMIT_INTERVAL_MS = 500;
+export const EMIT_INTERVAL_MS = 500;
 
 /*
  * Nothing measured yet publishes null, not a sample of nulls, so a subscriber can tell silence
- * from a figure. A sample is published only when a stamped frame arrived since the last one;
- * repeating it would hide a stall, because the panel judges staleness by the sample's age.
+ * from a figure. After the first stamped frame every tick publishes, including the ticks after
+ * the stream stops, so the subscriber sees the 'stalled' status rather than having to guess
+ * a stall from the age of the last sample.
  */
-let lastPublishedFrames = -1;
-
 const emit = ({ force = false } = {}) => {
   sample = summarizeProbe(state, Date.now());
 
@@ -432,9 +520,6 @@ const emit = ({ force = false } = {}) => {
     if (force) for (const fn of listeners) fn(null);
     return;
   }
-  if (!force && state.stampedFrames === lastPublishedFrames) return;
-
-  lastPublishedFrames = state.stampedFrames;
   for (const fn of listeners) fn(sample);
 };
 
@@ -465,9 +550,9 @@ export const subscribe = (fn) => {
 export const getSample = () => sample;
 
 /*
- * Clears what was measured, and nothing else. Called when a receiver starts, so figures stay on
- * screen after a stop but never leak into a new session. Sender state is left alone: on the
- * split view the publisher is already stamping when the player starts.
+ * Clears what was measured, and nothing else. Called when a receiver starts, so figures from a
+ * previous session never leak into a new one. Sender state is left alone: on the split view the
+ * publisher is already stamping when the player starts.
  */
 const resetMeasurements = () => {
   state.frames = [];
@@ -480,13 +565,11 @@ const resetMeasurements = () => {
   state.lastFrameAt = null;
   state.joinedFrames = 0;
   state.clockSamples = [];
-  lastPublishedFrames = -1;
 };
 
 /** Back to nothing running and nothing measured. */
 export const resetProbe = () => {
   state = createState();
-  lastPublishedFrames = -1;
   emit({ force: true });
 };
 
@@ -564,6 +647,8 @@ export const startSenderStamp = (videoSender, { videoCodec } = {}) => {
   let stopped = false;
   let decision = decideStamping(null, videoCodec);
   const sequences = new Map();
+  state.sentStamps = new Map();
+  const rememberSent = (stamp) => recordSentStamp(state.sentStamps, stamp);
   // SSRC to the small index that goes in the stamp. See rungIndexFor.
   const rungIndices = new Map();
   const failure = { reported: false };
@@ -603,12 +688,22 @@ export const startSenderStamp = (videoSender, { videoCodec } = {}) => {
             ?? metadata?.spatialIndex
             ?? 'single';
 
-          frame.data = stampFrameBytes(frame.data, {
-            sequence: nextSequenceFor(sequences, rung),
-            sentAt: Date.now(),
-            rung: rungIndexFor(rungIndices, rung),
-          });
-          state.stampedOut += 1;
+          /*
+           * Checked per frame as well as per codec decision: before negotiation the decision is
+           * provisional, and a frame that does not parse as H.264 must never get an SEI, which
+           * would corrupt it. Such a frame leaves untouched and consumes no sequence number.
+           */
+          if (stampInsertionOffset(frame.data) !== null) {
+            const index = rungIndexFor(rungIndices, rung);
+            const sequence = nextSequenceFor(sequences, rung);
+            const sentAt = Date.now();
+            const stamped = stampFrameBytes(frame.data, { sequence, sentAt, rung: index });
+            if (stamped !== null) {
+              frame.data = stamped;
+              rememberSent({ rung: index, sequence, sentAt });
+              state.stampedOut += 1;
+            }
+          }
         }
       } catch (error) {
         reportTransformFailure('sender', error, failure);
@@ -719,6 +814,7 @@ export const startReceiverProbe = (videoReceiver) => {
             remember({
               sequence: stamp.sequence,
               sentAt: stamp.sentAt,
+              own: isOwnFrame(state.sentStamps, stamp),
               arrivedAt,
               arrivedAtHighRes,
               rtpTimestamp,
