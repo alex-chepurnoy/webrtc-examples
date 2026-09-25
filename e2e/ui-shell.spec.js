@@ -425,6 +425,36 @@ test.describe('signaling URL', () => {
     const stored = await page.evaluate(() => JSON.stringify(window.localStorage));
     expect(stored).not.toContain('webrtc-session.json');
   });
+
+  // It would fail at the server, and a remembered copy would be offered back under WHIP.
+  test('a URL typed for the other transport is refused, and is never remembered', async ({ page }) => {
+    await page.goto('/#/publish');
+    await page.locator('#publishUseWhip').check();
+    await page.fill('#signalingURL', 'wss://engine.example/webrtc-session.json');
+    await page.fill('#applicationName', 'webrtc');
+    await page.fill('#streamName', 'mismatch');
+
+    await page.click('#publish-toggle');
+    await expect(page.locator('#error-panel')).toContainText('written for WSS');
+    await expect(page.locator('#publish-toggle')).toHaveText('Publish');
+
+    const stored = await page.evaluate(() => JSON.stringify(window.localStorage));
+    expect(stored).not.toContain('webrtc-session.json');
+  });
+
+  test('the player refuses one too', async ({ page }) => {
+    await page.goto('/#/play');
+    await page.locator('#playUseWhep').check();
+    await page.fill('#playSignalingURL', 'wss://engine.example/webrtc-session.json');
+    await page.fill('#playApplicationName', 'webrtc');
+    await page.fill('#playStreamName', 'mismatch');
+
+    await page.click('#play-toggle');
+    await expect(page.locator('#error-panel')).toContainText('written for WSS');
+
+    const stored = await page.evaluate(() => JSON.stringify(window.localStorage));
+    expect(stored).not.toContain('webrtc-session.json');
+  });
 });
 
 

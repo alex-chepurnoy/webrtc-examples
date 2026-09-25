@@ -230,6 +230,16 @@ const PublishSettingsForm = ({ tab = 'connection' }) => {
       return;
     }
 
+    // Refused rather than tried: it fails at the server, and would be remembered in the
+    // other transport's list.
+    if (urlMismatched) {
+      dispatch({
+        type: ErrorsActions.SET_ERROR_MESSAGE,
+        message: `The Signaling URL is written for ${transport === HTTP ? 'WSS' : 'WHIP'}, but ${transport === HTTP ? 'WHIP' : 'WSS'} is selected. Edit the URL or switch the transport back.`
+      });
+      return;
+    }
+
     if (publishSettings.stunServerURL !== '') {
       const urls = publishSettings.stunServerURL.split(',').map(url => url.trim()).filter(Boolean);
       const invalidUrl = urls.find(url => !isValidStunUrl(url));

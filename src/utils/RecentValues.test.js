@@ -76,6 +76,14 @@ describe('signalling URLs per transport', () => {
     expect(readRecent('signalingURL', 'wss')).toEqual([]);
     expect(readRecent('signalingURL', 'http')).toEqual(['https://a']);
   });
+
+  it('never files a URL under the transport it was not written for', () => {
+    rememberValue('signalingURL', 'wss://engine.example/webrtc-session.json', 'http');
+    rememberValue('signalingURL', 'https://engine.example', 'wss');
+
+    expect(readRecent('signalingURL', 'http')).toEqual([]);
+    expect(readRecent('signalingURL', 'wss')).toEqual([]);
+  });
 });
 
 // The old single-key list is sorted into both transports once. The module remembers
