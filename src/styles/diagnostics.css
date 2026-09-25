@@ -207,7 +207,7 @@
 
 .wz-debug__time { color: var(--wz-text-subtle); flex: none; }
 .wz-debug__arrow { flex: none; width: 1ch; font-weight: 700; }
-.wz-debug__row--out .wz-debug__arrow { color: var(--wz-accent); }
+.wz-debug__row--out .wz-debug__arrow { color: var(--wz-accent-text); }
 .wz-debug__row--in .wz-debug__arrow { color: var(--wz-info); }
 .wz-debug__row--error { background: color-mix(in srgb, var(--wz-danger) 10%, transparent); }
 .wz-debug__row--error .wz-debug__arrow,
@@ -301,7 +301,7 @@
   border-bottom: 1px solid var(--wz-border);
 }
 
-.wz-layers__table tbody th { color: var(--wz-accent); font-weight: 700; }
+.wz-layers__table tbody th { color: var(--wz-accent-text); font-weight: 700; }
 .wz-layers__table tbody tr + tr th,
 .wz-layers__table tbody tr + tr td { border-top: 1px solid var(--wz-border); }
 
