@@ -2,7 +2,6 @@ import React from 'react';
 import { useSelector } from 'react-redux';
 
 import Player from './Player';
-import GlassToGlassReader from './GlassToGlassReader';
 import PlaySettingsForm from './PlaySettingsForm';
 import DataChannelPanel from '../shared/DataChannelPanel';
 import CaptionOverlay from '../shared/CaptionOverlay';
@@ -36,7 +35,6 @@ const Play = () => {
             <div id="play-video-container">
               <Player />
               <CaptionOverlay context="play" />
-              <GlassToGlassReader connected={playing} />
             </div>
           </div>
           {chatEnabled ? (
