@@ -573,6 +573,14 @@ const WORKER_START_MS = 2000;
  * The streams are created at once, because a receiver's can only be taken in the track event,
  * and frames queue in them until something reads. They are handed over only after the worker
  * says it is running: a worker that fails to load would otherwise hold the media forever.
+ *
+ * Why a worker, measured 2026-09-25 (Chromium, local Engine, publisher and player in separate
+ * browsers, per-frame transport over 25 s, four runs per condition). With 50 to 150 ms busy
+ * loops every 200 to 500 ms on the player page, the main-thread route read p95 87 to 94 ms and
+ * max 144 to 159 ms against 16 ms and 18 ms in the worker; medians stayed at 8 to 12 ms on both.
+ * At about two thirds busy (100 to 200 ms every 50 to 150 ms) the main-thread median rose to 36
+ * to 42 ms and p95 to 152 to 166 ms, while the worker held 8 to 10 ms and 16 ms. With no jank
+ * the two routes matched (median 6 to 11 ms, p95 16 to 17 ms).
  */
 const startWorker = () => {
   if (typeof Worker !== 'function') return null;
