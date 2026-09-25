@@ -340,10 +340,14 @@ ul.navbar-nav {
 
 .wz-unmute:hover { background: var(--wz-accent); color: var(--wz-accent-contrast); }
 
-/* Always there when there is a picture, so sound can be turned off as well as on. */
+/*
+ * Always there when there is a picture, so sound can be turned off as well as on. Bottom left,
+ * clear of the native controls: the top left is where the burned-in clock is drawn, and the top
+ * right carries the resolution badge.
+ */
 .wz-mute-toggle {
   position: absolute;
-  top: 0.6em;
+  bottom: 3.2em;
   left: 0.6em;
   z-index: 3;
   padding: 0.2em 0.7em;
