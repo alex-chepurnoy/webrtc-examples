@@ -244,6 +244,9 @@ const PlaySettingsForm = ({ tab = 'connection' }) => {
       video.play().catch(() => {});
     }
 
+    // Whatever the banner says is about an earlier attempt. Cleared at the start rather than
+    // on connect, so a warning raised while this session sets up is not wiped with it.
+    dispatch({ type: ErrorsActions.HIDE_ERROR_PANEL });
     dispatch(PlaySettingsActions.startPlay());
   } 
   const handleStop = () => dispatch(PlaySettingsActions.stopPlay());

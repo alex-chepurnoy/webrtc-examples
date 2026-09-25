@@ -457,6 +457,40 @@ test.describe('signaling URL', () => {
   });
 });
 
+// The banner is about one attempt on one page, so it must not outlive either.
+test.describe('error banner', () => {
+  const refusePlay = async (page) => {
+    await page.goto('/#/play');
+    await page.fill('#playApplicationName', 'webrtc');
+    await page.fill('#playStreamName', 'noUrl');
+    await page.click('#play-toggle');
+    await expect(page.locator('#error-panel')).toContainText('Signaling URL is required');
+  };
+
+  test('can be dismissed', async ({ page }) => {
+    await refusePlay(page);
+    await page.getByRole('button', { name: 'Dismiss error' }).click();
+    await expect(page.locator('#error-panel')).toHaveCount(0);
+  });
+
+  test('goes when the page changes', async ({ page }) => {
+    await refusePlay(page);
+    await page.getByRole('link', { name: 'Publish', exact: true }).click();
+    await expect(page).toHaveURL(/#\/publish$/);
+    await expect(page.locator('#error-panel')).toHaveCount(0);
+  });
+
+  test('goes when the next attempt starts', async ({ page }) => {
+    // Held open and never answered, so the attempt neither fails nor connects while we look.
+    await page.routeWebSocket(/webrtc-session\.json/, () => {});
+    await refusePlay(page);
+
+    await page.fill('#playSignalingURL', 'wss://engine.example/webrtc-session.json');
+    await page.click('#play-toggle');
+    await expect(page.locator('#error-panel')).toHaveCount(0);
+  });
+});
+
 
 // A custom dropdown sized to the panel (a native <datalist> popup is not), over a text field.
 test.describe('remembered values dropdown', () => {

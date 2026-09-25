@@ -283,6 +283,9 @@ const PublishSettingsForm = ({ tab = 'connection' }) => {
     recentApplication.remember(publishSettings.applicationName);
     recentStream.remember(publishSettings.streamName);
 
+    // Whatever the banner says is about an earlier attempt. Cleared at the start rather than
+    // on connect, so a warning raised while this session sets up is not wiped with it.
+    dispatch({ type: ErrorsActions.HIDE_ERROR_PANEL });
     dispatch(PublishSettingsActions.startPublish());
   };
 
