@@ -1,5 +1,3 @@
-import { HTTP, WSS, transportOf } from './SignalingUrlUtils';
-
 /*
  * Recently used signaling URLs, application names and stream names: per field, most recent
  * first, offered as suggestions. Signaling URLs are also kept per transport.
@@ -30,52 +28,7 @@ const write = (storageKey, values) => {
   }
 };
 
-/*
- * Splits the old unscoped signaling URL list into the per-transport lists, once. Values
- * that are neither transport are dropped.
- */
-const migrateSignalingUrls = () => {
-  const legacy = key('signalingURL');
-  let raw;
-  try {
-    raw = window.localStorage.getItem(legacy);
-  } catch {
-    return;
-  }
-  if (raw == null) return;
-
-  const byTransport = { [WSS]: [], [HTTP]: [] };
-  read(legacy).forEach((value) => {
-    const transport = transportOf(value);
-    if (transport) byTransport[transport].push(value);
-  });
-
-  [WSS, HTTP].forEach((transport) => {
-    const target = key('signalingURL', transport);
-    const merged = [...byTransport[transport], ...read(target)];
-    const deduped = merged.filter((v, i) => merged.indexOf(v) === i).slice(0, LIMIT);
-    if (deduped.length) write(target, deduped);
-  });
-
-  try {
-    window.localStorage.removeItem(legacy);
-  } catch {
-    // Leaving it behind costs nothing: the merge above is idempotent.
-  }
-};
-
-let migrated = false;
-
-const ready = (field) => {
-  if (migrated || field !== 'signalingURL') return;
-  migrated = true;
-  migrateSignalingUrls();
-};
-
-export const readRecent = (field, scope = null) => {
-  ready(field);
-  return read(key(field, scope));
-};
+export const readRecent = (field, scope = null) => read(key(field, scope));
 
 /** Most recent first, no duplicates, capped. Blank values are not worth remembering. */
 export const rememberValue = (field, value, scope = null) => {

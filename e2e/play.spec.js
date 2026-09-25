@@ -1,6 +1,5 @@
 import { expect, test } from '@playwright/test';
 import {
-  listStreams,
   requireEngine,
 } from './helpers.js';
 import {

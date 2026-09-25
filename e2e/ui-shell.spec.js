@@ -511,23 +511,6 @@ test.describe('remembered values dropdown', () => {
     await expect(page.locator('#signalingURL-recent .wz-recent__value'))
       .toHaveText(['https://engine.example']);
   });
-
-  // A list stored under the old single key must survive the split.
-  test('a list kept before the split is sorted into the two transports', async ({ page }) => {
-    await page.goto('/#/publish');
-    await remember(page, 'wz.recent.signalingURL',
-      ['wss://engine.example/webrtc-session.json', 'https://engine.example']);
-    await page.reload();
-
-    await page.locator('#signalingURL-recent-toggle').click();
-    await expect(page.locator('#signalingURL-recent .wz-recent__value'))
-      .toHaveText(['wss://engine.example/webrtc-session.json']);
-
-    await page.locator('#publishUseWhip').check();
-    await page.locator('#signalingURL-recent-toggle').click();
-    await expect(page.locator('#signalingURL-recent .wz-recent__value'))
-      .toHaveText(['https://engine.example']);
-  });
 });
 
 // Icons are inline SVG with no icon font; nothing else in this suite would notice them missing.

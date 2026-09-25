@@ -93,6 +93,19 @@ export const describeRejectedVideo = (answerSdp, offeredCodec, browserOffersCode
       + `Audio is still being sent.`;
   }
 
+  /*
+   * Unknown support is not a verdict on either side. Whether the offer carried the codec
+   * or fell back to the full list cannot be told apart here, so say what was refused and
+   * where each half would be checked, without claiming which one it was.
+   */
+  if (asked && browserOffersCodec == null) {
+    return `No video is being sent: the Engine application refused the video offer. It could `
+      + `not be determined whether this browser can encode ${asked} for WebRTC, so either the `
+      + `browser could not offer it or the application does not accept it. Check `
+      + `PreferredCodecsVideo in the application's Application.xml, or set Video Codec to `
+      + 'Auto. Audio is still being sent.';
+  }
+
   if (asked) {
     return `No video is being sent: the Engine application does not accept ${asked}. Add it `
       + `to PreferredCodecsVideo in the application's Application.xml, or set Video Codec to `

@@ -13,6 +13,14 @@ export const openTab = async (page, label) => {
   await expect(tab).toHaveAttribute('aria-selected', 'true');
 };
 
+/**
+ * Waits until the local camera preview actually has frames.
+ *
+ * Clicking Publish before getUserMedia resolves produces a connection with no media: it
+ * reaches "connected" and reports an RTT, but there is no outbound RTP at all, so every
+ * codec, bitrate and frame figure stays empty. That looks like an application bug and is
+ * really a race in the test.
+ */
 export const waitForCamera = async (page) => {
   // CompositorUserMedia sets media.stream without dispatching SET_PUBLISH_VIDEO_TRACK, so a
   // live preview does not mean publishSettings.videoTrack is set. Re-selecting the camera

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { cameraTrackOf, selectPublishVideoTrack } from './VideoTrackUtils';
+import { CAMERA_SOURCE_KEY, cameraTrackOf, selectPublishVideoTrack } from './VideoTrackUtils';
 
 const trackA = { id: 'a' };
 const trackB = { id: 'b' };
@@ -59,6 +59,13 @@ describe('cameraTrackOf', () => {
   it('gives back a plain track unchanged', () => {
     const track = { kind: 'video' };
     expect(cameraTrackOf(track)).toBe(track);
+  });
+
+  // burnedClock.js records the camera on the generator track it hands back to the publisher.
+  it('gives back the source camera for a derived track', () => {
+    const camera = { kind: 'video', id: 'camera' };
+    const derived = { kind: 'video', id: 'derived', [CAMERA_SOURCE_KEY]: camera };
+    expect(cameraTrackOf(derived)).toBe(camera);
   });
 
   it('survives having nothing to look at', () => {
