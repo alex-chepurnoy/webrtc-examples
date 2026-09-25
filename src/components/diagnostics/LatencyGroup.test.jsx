@@ -83,7 +83,7 @@ describe('LatencyGroup', () => {
         warming: true, reason: 'Exchanging clock samples (3 of 8).',
       },
     }));
-    expect(rowValue('Publisher to player')).toBe('—');
+    expect(rowValue('Publisher to player')).toBe('\u2014');
     expect(rowValue('Player jitter buffer')).toBe('20 ms');
     expect(rowValue('Clock')).toBe('syncing clocks');
     expect(screen.queryByText(/too uncertain/)).toBeNull();
