@@ -78,7 +78,14 @@ describe('describeRejectedVideo', () => {
 
   it('stays neutral when browser support could not be determined', () => {
     const m = describeRejectedVideo(REJECTED, 'H265', null);
-    expect(m).toMatch(/the Engine application does not accept H265/i);
+    expect(m).toMatch(/could not be determined whether this browser can encode H265/i);
+    expect(m).toContain('PreferredCodecsVideo');
+    expect(m).not.toMatch(/does not accept H265\./);
+    expect(m).not.toMatch(/this browser cannot encode/);
+  });
+
+  it('treats an omitted browser-support argument as undetermined', () => {
+    expect(describeRejectedVideo(REJECTED, 'H265')).toMatch(/could not be determined/i);
   });
 
   it('says both sides when no specific codec was asked for', () => {
