@@ -9,7 +9,7 @@ export default [
     files: ['**/*.{js,jsx}'],
     languageOptions: {
       ecmaVersion: 'latest',
-      globals: { ...globals.browser, ...globals.node },
+      globals: globals.browser,
       parserOptions: {
         ecmaFeatures: { jsx: true },
         sourceType: 'module',
@@ -31,13 +31,21 @@ export default [
       'react-hooks/refs': 'warn',
       'react-hooks/immutability': 'warn',
       // A leading underscore marks a binding that is deliberately discarded,
-      // most often an unused event argument or a caught error.
+      // most often an unused event argument or a caught error. The default React
+      // import is kept by the components but unused under the automatic JSX runtime.
       'no-unused-vars': ['warn', {
-        varsIgnorePattern: '^[A-Z_]',
+        varsIgnorePattern: '^(_|React$)',
         argsIgnorePattern: '^_',
         caughtErrorsIgnorePattern: '^_',
       }],
     },
   },
+  {
+    // Tooling runs in Node, and the Playwright specs do too, outside their page.evaluate
+    // callbacks. The app itself is browser code, so Node globals stay out of src/.
+    files: ['*.config.js', 'e2e/**/*.js'],
+    languageOptions: {
+      globals: { ...globals.browser, ...globals.node },
+    },
+  },
 ];
-
