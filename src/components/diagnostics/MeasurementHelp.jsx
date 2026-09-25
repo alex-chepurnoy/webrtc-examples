@@ -5,7 +5,11 @@ import React, { useCallback, useRef } from 'react';
  * the combined page. A <dialog> gives modality, focus containment, Escape and the backdrop.
  */
 
-const MeasurementHelp = ({ label = 'More info' }) => {
+const MeasurementHelp = ({
+  label = 'More info',
+  // The visible label says nothing out of context, so the accessible name says what it opens.
+  accessibleLabel = 'More info: how the latency figures are measured',
+}) => {
   const dialog = useRef(null);
 
   const open = useCallback(() => dialog.current?.showModal(), []);
@@ -22,14 +26,24 @@ const MeasurementHelp = ({ label = 'More info' }) => {
         type="button"
         id="measurement-help-open"
         className="wz-help__open"
+        aria-label={accessibleLabel}
+        aria-haspopup="dialog"
         onClick={open}
       >
         {label}
       </button>
 
-      <dialog ref={dialog} className="wz-help" id="measurement-help" onClick={onBackdrop}>
+      <dialog
+        ref={dialog}
+        className="wz-help"
+        id="measurement-help"
+        aria-labelledby="measurement-help-title"
+        onClick={onBackdrop}
+      >
         <div className="wz-help__head">
-          <h2 className="wz-help__title">How these numbers are measured</h2>
+          <h2 className="wz-help__title" id="measurement-help-title">
+            How these numbers are measured
+          </h2>
           <button
             type="button"
             className="wz-help__close"
@@ -64,7 +78,43 @@ const MeasurementHelp = ({ label = 'More info' }) => {
               <tr>
                 <th scope="row">Publisher to player</th>
                 <td>Measured, from a marker inside the frame</td>
-                <td>One frame, publisher&apos;s encoder to player&apos;s decoder.</td>
+                <td>
+                  The median over up to the last 120 frames, from just after the
+                  publisher&apos;s encoder to this player reading the frame off the wire.
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">Player jitter buffer, decode and display</th>
+                <td>Measured, in this browser</td>
+                <td>
+                  The median over the same frames, from reading the frame off the wire to the
+                  moment the browser expects to show it.
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">Total</th>
+                <td>Measured, per frame</td>
+                <td>
+                  The median of the two legs added frame by frame, over the same frames. A median
+                  of sums is not the sum of the medians, so it can differ from the two rows added
+                  by a millisecond or two.
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">Clock</th>
+                <td>Proven, or estimated</td>
+                <td>
+                  How the publisher&apos;s clock relates to this one. See below.
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">Frames missed</th>
+                <td>Counted, from the marker</td>
+                <td>
+                  Gaps in the marker&apos;s sequence number within one simulcast rung, so a
+                  publisher that stalls shows up here rather than as a latency that quietly
+                  drifts upwards.
+                </td>
               </tr>
             </tbody>
           </table>
@@ -90,10 +140,28 @@ const MeasurementHelp = ({ label = 'More info' }) => {
 
           <h3>The probe covers the whole path</h3>
           <p>
-            Its timestamp travels inside the frame from the publisher, so it includes the
-            publisher&apos;s packetization, the server, and this player&apos;s jitter buffer. It
-            is normally several times the Latency estimate. The difference is the part the
-            counters cannot see.
+            Its timestamp travels inside the frame from the publisher. Publisher to player
+            covers the publisher&apos;s packetization and pacing, both network legs, the server,
+            and the wait for the last packet of the frame, retransmissions included. The wait in
+            this player&apos;s jitter buffer comes after the frame is read, so it is in the
+            player row. The Latency estimate sees only the last hop, which is why the two
+            figures differ.
+          </p>
+          <p>
+            The frame is read on this page&apos;s main thread. If the page is busy, the reading
+            is late, and that delay moves from the player row into Publisher to player. The
+            total does not change.
+          </p>
+
+          <h3>Clock</h3>
+          <p>
+            The two legs are timed on two clocks. When every frame measured is one this page
+            stamped itself, as on Publish + Play playing its own stream, there is one clock and
+            the figures are exact. Otherwise the offset between the two clocks is estimated over
+            a data channel and every figure that depends on it carries a plus or minus bound.
+            Two tabs on one machine share a clock but cannot prove it, so they read exact only
+            when the round trip to the server is a couple of milliseconds, as with a server on
+            the same machine. The player row needs no clock and is shown in every case.
           </p>
 
           <h3>Packet loss is per direction</h3>
@@ -103,8 +171,10 @@ const MeasurementHelp = ({ label = 'More info' }) => {
             which leg to look at.
           </p>
           <p>
-            <code>Frames missed</code> moves with it: a lost packet destroys the whole frame it
-            belonged to, and one 1080p frame spans many packets.
+            <code>Frames missed</code> counts frames that never reached the player. A lost packet
+            is usually recovered by retransmission, which shows up as a slower frame rather than
+            a missed one; a frame is missed when its packets could not be recovered in time, or
+            when the publisher never sent it.
           </p>
 
           <h3>Not included anywhere</h3>
