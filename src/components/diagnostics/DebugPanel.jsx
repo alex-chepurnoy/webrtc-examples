@@ -76,12 +76,16 @@ const DebugPanel = ({ defaultOpen = false }) => {
 
   const shown = newestFirst ? [...filtered].reverse() : filtered;
 
+  // Keyed on the newest entry's id, which only grows. The length stops changing once the
+  // buffer is full, and Follow would stop with it.
+  const newestId = filtered.length > 0 ? filtered[filtered.length - 1].id : 0;
+
   useEffect(() => {
     if (!open || !follow) return;
     const el = scrollerRef.current;
     if (!el) return;
     el.scrollTop = newestFirst ? 0 : el.scrollHeight;
-  }, [shown.length, open, follow, newestFirst]);
+  }, [newestId, open, follow, newestFirst]);
 
   const copyAll = () => {
     const text = shown
@@ -115,6 +119,7 @@ const DebugPanel = ({ defaultOpen = false }) => {
                   key={c.key}
                   type="button"
                   className={`wz-chip${channel === c.key ? ' wz-chip--on' : ''}`}
+                  aria-pressed={channel === c.key}
                   onClick={() => setChannel(c.key)}
                 >
                   {c.label}
