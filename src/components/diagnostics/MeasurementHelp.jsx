@@ -148,9 +148,10 @@ const MeasurementHelp = ({
             figures differ.
           </p>
           <p>
-            The frame is read on this page&apos;s main thread. If the page is busy, the reading
-            is late, and that delay moves from the player row into Publisher to player. The
-            total does not change.
+            Both ends read the frame in a background worker, so a busy page does not move time
+            from one row to the other. Where a worker cannot start, the frame is read on the
+            page itself; a busy player page then moves some of its own delay into Publisher to
+            player. The total does not change either way.
           </p>
 
           <h3>Clock</h3>
