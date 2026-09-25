@@ -1,12 +1,16 @@
 import React from 'react';
 import { useSelector } from 'react-redux';
 
-/* LIVE while publishing, PLAYING while receiving; renders nothing when neither is connected. */
+/*
+ * LIVE while publishing, PLAYING while receiving. The live region is always mounted and only
+ * its contents come and go: a region inserted together with its first badge is not announced.
+ *
+ * Both badges show on every page. A session keeps running when its page is left, so a
+ * PLAYING badge on Publish is a session still in progress, not a stale flag.
+ */
 const StatusBadges = () => {
   const publishing = useSelector((state) => state.webrtcPublish.connected);
   const playing = useSelector((state) => state.webrtcPlay.connected);
-
-  if (!publishing && !playing) return null;
 
   const badge = (key, id, label, modifier) => (
     <span
