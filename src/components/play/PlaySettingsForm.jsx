@@ -62,6 +62,8 @@ const FormInput = ({ label, id, value, onChange, disabled, ...props }) => (
 const PlaySettingsForm = ({ tab = 'connection' }) => {
   const dispatch = useDispatch();
   const [initialized, setInitialized] = useState(false);
+  // Whether the client IP has been judged yet: on leaving the field or on Play, never mid-typing.
+  const [ipChecked, setIpChecked] = useState(false);
   const playSettings = useSelector((state) => state.playSettings);
   const webrtcPlay = useSelector((state) => state.webrtcPlay);
 
@@ -184,6 +186,16 @@ const PlaySettingsForm = ({ tab = 'connection' }) => {
       return;
     }
 
+    // Refused rather than tried: it fails at the server, and would be remembered in the
+    // other transport's list.
+    if (urlMismatched) {
+      dispatch({
+        type: ErrorsActions.SET_ERROR_MESSAGE,
+        message: `The Signaling URL is written for ${transport === HTTP ? 'WSS' : 'WHEP'}, but ${transport === HTTP ? 'WHEP' : 'WSS'} is selected. Edit the URL or switch the transport back.`
+      });
+      return;
+    }
+
     if (playSettings.stunServerURL !== '') {
       const urls = playSettings.stunServerURL.split(',').map(url => url.trim()).filter(Boolean);
       const invalidUrl = urls.find(url => !isValidStunUrl(url));
@@ -213,6 +225,7 @@ const PlaySettingsForm = ({ tab = 'connection' }) => {
 
     // The address is only sent when the box is ticked, so it is only judged then.
     if (playSettings.isIp && !isValidIpAddress(playSettings.ip)) {
+      setIpChecked(true);
       dispatch({
         type: ErrorsActions.SET_ERROR_MESSAGE,
         message: playSettings.ip
@@ -234,6 +247,9 @@ const PlaySettingsForm = ({ tab = 'connection' }) => {
       video.play().catch(() => {});
     }
 
+    // Whatever the banner says is about an earlier attempt. Cleared at the start rather than
+    // on connect, so a warning raised while this session sets up is not wiped with it.
+    dispatch({ type: ErrorsActions.HIDE_ERROR_PANEL });
     dispatch(PlaySettingsActions.startPlay());
   } 
   const handleStop = () => dispatch(PlaySettingsActions.stopPlay());
@@ -245,8 +261,14 @@ const PlaySettingsForm = ({ tab = 'connection' }) => {
 
   const { connected } = webrtcPlay;
 
-  // Only complain about something the user has actually typed.
-  const ipInvalid = playSettings.isIp && !!playSettings.ip && !isValidIpAddress(playSettings.ip);
+  // Only complain about something the user has actually typed, and has finished typing.
+  const ipInvalid = ipChecked && playSettings.isIp && !!playSettings.ip && !isValidIpAddress(playSettings.ip);
+
+  // A fix is accepted as it is typed; a new mistake waits for the next blur.
+  const handleIpChange = (e) => {
+    if (isValidIpAddress(e.target.value)) setIpChecked(false);
+    dispatch({ type: PlaySettingsActions.SET_PLAY_IP, ip: e.target.value });
+  };
 
   // No codec gate here: the player does not choose the codec.
 
@@ -446,10 +468,13 @@ const PlaySettingsForm = ({ tab = 'connection' }) => {
               aria-invalid={ipInvalid ? 'true' : undefined}
               aria-describedby={ipInvalid ? 'playIp-error' : undefined}
               className={'form-control' + (ipInvalid ? ' is-invalid' : '')}
-              onChange={handleInputChange(PlaySettingsActions.SET_PLAY_IP, 'ip')}
+              onChange={handleIpChange}
+              onBlur={() => setIpChecked(true)}
             />
+            {/* Not an alert: it is tied to the field by aria-describedby, and Play reports the
+                same problem in the banner, which is one. */}
             {ipInvalid && (
-              <small className="wz-field-error" id="playIp-error" role="alert">
+              <small className="wz-field-error" id="playIp-error">
                 Not an IP address. Use IPv4 (203.0.113.42) or IPv6 (2001:db8::1).
               </small>
             )}

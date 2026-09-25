@@ -30,10 +30,18 @@ const write = (storageKey, values) => {
 
 export const readRecent = (field, scope = null) => read(key(field, scope));
 
-/** Most recent first, no duplicates, capped. Blank values are not worth remembering. */
+/**
+ * Most recent first, no duplicates, capped. Blank values are not worth remembering, and
+ * neither is a signaling URL written for the other transport: it would be offered back
+ * where it cannot work.
+ */
 export const rememberValue = (field, value, scope = null) => {
   const text = String(value ?? '').trim();
   if (text === '') return readRecent(field, scope);
+  if (field === 'signalingURL' && scope) {
+    const written = transportOf(text);
+    if (written !== null && written !== scope) return readRecent(field, scope);
+  }
 
   const next = [text, ...readRecent(field, scope).filter((v) => v !== text)].slice(0, LIMIT);
   write(key(field, scope), next);

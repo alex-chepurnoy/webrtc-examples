@@ -228,6 +228,16 @@ const PublishSettingsForm = ({ tab = 'connection' }) => {
       return;
     }
 
+    // Refused rather than tried: it fails at the server, and would be remembered in the
+    // other transport's list.
+    if (urlMismatched) {
+      dispatch({
+        type: ErrorsActions.SET_ERROR_MESSAGE,
+        message: `The Signaling URL is written for ${transport === HTTP ? 'WSS' : 'WHIP'}, but ${transport === HTTP ? 'WHIP' : 'WSS'} is selected. Edit the URL or switch the transport back.`
+      });
+      return;
+    }
+
     if (publishSettings.stunServerURL !== '') {
       const urls = publishSettings.stunServerURL.split(',').map(url => url.trim()).filter(Boolean);
       const invalidUrl = urls.find(url => !isValidStunUrl(url));
@@ -271,11 +281,31 @@ const PublishSettingsForm = ({ tab = 'connection' }) => {
     recentApplication.remember(publishSettings.applicationName);
     recentStream.remember(publishSettings.streamName);
 
+    // Whatever the banner says is about an earlier attempt. Cleared at the start rather than
+    // on connect, so a warning raised while this session sets up is not wiped with it.
+    dispatch({ type: ErrorsActions.HIDE_ERROR_PANEL });
     dispatch(PublishSettingsActions.startPublish());
   };
 
   // Test aid: trigger an ICE restart on the active publish peer connection. See IceRestartUtils.
   const handleRestartIce = () => triggerIceRestart(webrtcPublish.peerConnection);
+
+  // The same keys the cookie uses, which the mount effect above reads back from the query.
+  // The hash is kept so the link opens this page rather than the default route.
+  const handleShareLink = () => {
+    const params = new URLSearchParams();
+    Object.entries(publishUrlParametersMap).forEach(([stateKey, queryKey]) => {
+      const value = publishSettings[stateKey];
+      if (value == null || value === '') return;
+      params.set(queryKey, typeof value === 'object' ? JSON.stringify(value) : value);
+    });
+
+    const shareUrl = `${window.location.origin}${window.location.pathname}?${params.toString()}${window.location.hash}`;
+
+    navigator.clipboard.writeText(shareUrl)
+      .then(() => alert('Share link copied to clipboard!'))
+      .catch((err) => console.error('Failed to copy link:', err));
+  };
 
   // null means the question could not be answered here, which is not a reason to warn.
   // Memoized: getCapabilities is not free and this form re-renders on every keystroke.
@@ -421,12 +451,13 @@ const PublishSettingsForm = ({ tab = 'connection' }) => {
             <PublishVideoDropdown />
           </div>
           <div className="col-2">
+            {/* The label names the action and flips with it, so there is no aria-pressed as
+                well: the two together read as "Turn the camera on, pressed". */}
             <button
               id="camera-toggle"
               type="button"
               className="control-button"
               title={isCameraOn ? 'Turn the camera off' : 'Turn the camera on'}
-              aria-pressed={!isCameraOn}
               aria-label={isCameraOn ? 'Turn the camera off' : 'Turn the camera on'}
               disabled={!publishSettings.videoTrack}
               onClick={toggleCamera}
@@ -450,7 +481,6 @@ const PublishSettingsForm = ({ tab = 'connection' }) => {
               type="button"
               className="control-button"
               title={isMicOn ? 'Mute the microphone' : 'Unmute the microphone'}
-              aria-pressed={!isMicOn}
               aria-label={isMicOn ? 'Mute the microphone' : 'Unmute the microphone'}
               disabled={!publishSettings.audioTrack}
               onClick={toggleMicrophone}>
@@ -651,8 +681,14 @@ const PublishSettingsForm = ({ tab = 'connection' }) => {
             }
           </div>
           <div className="col-2">
-            <button id="publish-share-link" type="button" className="control-button mt-0">
-              <img alt="" className="noll" id="mute-off" src={fileCopyImage} />
+            <button
+              id="publish-share-link"
+              type="button"
+              className="control-button mt-0"
+              onClick={handleShareLink}
+              title="Copy share link"
+            >
+              <img alt="Copy Link" className="noll" src={fileCopyImage} />
             </button>
           </div>
         </div>

@@ -38,9 +38,16 @@ test.describe('settings panel', () => {
     await openTab(page, 'Advanced');
     await page.locator('#playIsIp').check();
 
+    // Not while typing: "192.168.1.9" on the way to "192.168.1.99" is not a mistake yet.
     await page.fill('#playIp', '192.168.1.999');
+    await expect(page.locator('#playIp')).not.toHaveAttribute('aria-invalid', 'true');
+    await expect(page.locator('#playIp-error')).toHaveCount(0);
+
+    // On leaving the field, in place, and not as an interruption.
+    await page.locator('#playIp').blur();
     await expect(page.locator('#playIp')).toHaveAttribute('aria-invalid', 'true');
     await expect(page.locator('#playIp-error')).toBeVisible();
+    await expect(page.locator('#playIp-error')).not.toHaveAttribute('role', 'alert');
 
     // The primary action refuses it too.
     await openTab(page, 'Connection');
@@ -243,14 +250,19 @@ test.describe('video overlays', () => {
       });
       expect(within).toBe(true);
 
-      // Sound is controllable whenever there is a picture.
+      // Sound starts on (the Play click unmutes inside the gesture), and stays controllable.
       const toggle = viewer.locator('#player-mute-toggle');
       await expect(toggle).toBeVisible();
-      const before = await viewer.evaluate(() => document.querySelector('#player-video').muted);
+      const muted = () => viewer.evaluate(() => document.querySelector('#player-video').muted);
+      expect(await muted()).toBe(false);
+      await expect(toggle).toHaveText('Mute');
+      await expect(viewer.locator('#player-unmute')).toHaveCount(0);
+
       await toggle.click();
-      await expect.poll(() => viewer.evaluate(() => document.querySelector('#player-video').muted))
-        .toBe(!before);
-      await expect(toggle).toHaveAttribute('aria-pressed', String(!before));
+      await expect.poll(muted).toBe(true);
+      // The label says the action; a pressed state as well would read "Unmute, pressed".
+      await expect(toggle).toHaveText('Unmute');
+      await expect(toggle).not.toHaveAttribute('aria-pressed');
 
       await publisher.close();
       await viewer.close();
@@ -532,6 +544,131 @@ test.describe('signaling URL', () => {
     const stored = await page.evaluate(() => JSON.stringify(window.localStorage));
     expect(stored).not.toContain('webrtc-session.json');
   });
+
+  // It would fail at the server, and a remembered copy would be offered back under WHIP.
+  test('a URL typed for the other transport is refused, and is never remembered', async ({ page }) => {
+    await page.goto('/#/publish');
+    await page.locator('#publishUseWhip').check();
+    await page.fill('#signalingURL', 'wss://engine.example/webrtc-session.json');
+    await page.fill('#applicationName', 'webrtc');
+    await page.fill('#streamName', 'mismatch');
+
+    await page.click('#publish-toggle');
+    await expect(page.locator('#error-panel')).toContainText('written for WSS');
+    await expect(page.locator('#publish-toggle')).toHaveText('Publish');
+
+    const stored = await page.evaluate(() => JSON.stringify(window.localStorage));
+    expect(stored).not.toContain('webrtc-session.json');
+  });
+
+  test('the player refuses one too', async ({ page }) => {
+    await page.goto('/#/play');
+    await page.locator('#playUseWhep').check();
+    await page.fill('#playSignalingURL', 'wss://engine.example/webrtc-session.json');
+    await page.fill('#playApplicationName', 'webrtc');
+    await page.fill('#playStreamName', 'mismatch');
+
+    await page.click('#play-toggle');
+    await expect(page.locator('#error-panel')).toContainText('written for WSS');
+
+    const stored = await page.evaluate(() => JSON.stringify(window.localStorage));
+    expect(stored).not.toContain('webrtc-session.json');
+  });
+});
+
+test.describe('camera preview', () => {
+  // WebKit may not paint a video that started playing under display:none.
+  test('the preview is laid out but invisible until there is a picture', async ({ page }) => {
+    await page.addInitScript(() => {
+      navigator.mediaDevices.getUserMedia = () => new Promise(() => {});
+    });
+    await page.goto('/#/publish');
+    await expect(page.locator('#publish-video-container .wz-video-placeholder')).toBeVisible();
+
+    const style = await page.evaluate(() => {
+      const cs = getComputedStyle(document.getElementById('publisher-video'));
+      return { display: cs.display, visibility: cs.visibility };
+    });
+    expect(style).toEqual({ display: 'block', visibility: 'hidden' });
+  });
+
+  test('switching camera does not flash the placeholder', async ({ page }) => {
+    await page.goto('/#/publish');
+    await waitForCamera(page);
+
+    await page.evaluate(() => {
+      window.__placeholderSeen = 0;
+      new MutationObserver(() => {
+        if (document.querySelector('#publish-video-container .wz-video-placeholder')) window.__placeholderSeen += 1;
+      }).observe(document.getElementById('publish-video-container'), { childList: true, subtree: true });
+    });
+
+    // The same round trip waitForCamera makes: release the camera, then open it again.
+    await openTab(page, 'Source');
+    const cameraId = await page.locator('#camera-list-select').inputValue();
+    await page.selectOption('#camera-list-select', '');
+    await page.waitForTimeout(250);
+    await page.selectOption('#camera-list-select', cameraId);
+    await page.waitForFunction(() => {
+      const v = document.getElementById('publisher-video');
+      return v.srcObject && v.srcObject.getVideoTracks().some((t) => t.readyState === 'live') && v.videoWidth > 0;
+    });
+
+    expect(await page.evaluate(() => window.__placeholderSeen)).toBe(0);
+  });
+});
+
+test.describe('share link', () => {
+  test('the publisher copies a link that reopens this page with these settings', async ({ page, context }) => {
+    await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+    page.on('dialog', (dialog) => dialog.accept());
+    await page.goto('/#/publish');
+    await page.fill('#applicationName', 'webrtc');
+    await page.fill('#streamName', 'shared');
+
+    const share = page.getByRole('button', { name: 'Copy Link' });
+    // The image used to reuse the microphone icon's id.
+    await expect(share.locator('img')).not.toHaveAttribute('id');
+
+    await share.click();
+    const clipboard = () => page.evaluate(() => navigator.clipboard.readText());
+    await expect.poll(clipboard).toContain('publishStreamName=shared');
+    expect(await clipboard()).toMatch(/#\/publish$/);
+  });
+});
+
+// The banner is about one attempt on one page, so it must not outlive either.
+test.describe('error banner', () => {
+  const refusePlay = async (page) => {
+    await page.goto('/#/play');
+    await page.fill('#playApplicationName', 'webrtc');
+    await page.fill('#playStreamName', 'noUrl');
+    await page.click('#play-toggle');
+    await expect(page.locator('#error-panel')).toContainText('Signaling URL is required');
+  };
+
+  test('can be dismissed', async ({ page }) => {
+    await refusePlay(page);
+    await page.getByRole('button', { name: 'Dismiss error' }).click();
+    await expect(page.locator('#error-panel')).toHaveCount(0);
+  });
+
+  test('goes when the page changes', async ({ page }) => {
+    await refusePlay(page);
+    await page.getByRole('link', { name: 'Publish', exact: true }).click();
+    await expect(page).toHaveURL(/#\/publish$/);
+    await expect(page.locator('#error-panel')).toHaveCount(0);
+  });
+
+  test('goes when the next attempt starts', async ({ page }) => {
+    // Held open and never answered, so the attempt neither fails nor connects while we look.
+    await page.routeWebSocket(/webrtc-session\.json/, () => {});
+    await refusePlay(page);
+
+    await page.fill('#playSignalingURL', 'wss://engine.example/webrtc-session.json');
+    await page.click('#play-toggle');
+    await expect(page.locator('#error-panel')).toHaveCount(0);
+  });
 });
 
 
@@ -592,6 +729,26 @@ test.describe('remembered values dropdown', () => {
     await page.reload();
     await page.locator('#streamName-recent-toggle').click();
     await expect(page.locator('#streamName-recent .wz-recent__value')).toHaveText(['keep']);
+  });
+
+  test('points at its list only while the list is there', async ({ page }) => {
+    await page.goto('/#/publish');
+    await remember(page, 'wz.recent.streamName', ['alpha']);
+    await page.reload();
+
+    const field = page.locator('#streamName');
+    await expect(field).not.toHaveAttribute('aria-controls');
+    await page.locator('#streamName-recent-toggle').click();
+    await expect(field).toHaveAttribute('aria-controls', 'streamName-recent');
+  });
+
+  // No submit button and several fields, so the form has no implicit submission to trigger.
+  test('Enter on a typed value leaves the page alone', async ({ page }) => {
+    await page.goto('/#/publish');
+    await page.fill('#streamName', 'typed');
+    await page.locator('#streamName').press('Enter');
+    await expect(page).toHaveURL(/#\/publish$/);
+    await expect(page.locator('#streamName')).toHaveValue('typed');
   });
 
   test('typing filters, and a new value is still typed straight over them', async ({ page }) => {
@@ -664,8 +821,10 @@ test.describe('assets', () => {
 });
 
 /*
- * The toggles render from MediaStreamTrack.enabled, not a copy in component state, so a
- * remount cannot show a live microphone over a muted track.
+ * The toggles render from the store's videoEnabled and audioEnabled flags, which
+ * TrackEnabledSync applies to the tracks, not from a copy in component state, so a remount
+ * cannot show a live microphone over a muted track. Each label names the action it takes and
+ * flips with it; there is no aria-pressed on top of that.
  */
 test.describe('camera and microphone toggles', () => {
 
@@ -690,11 +849,12 @@ test.describe('camera and microphone toggles', () => {
     expect(await captureTracks(page)).toBe(true);
 
     const mute = page.locator('#mute-toggle');
-    await expect(mute).toHaveAttribute('aria-pressed', 'false');
+    await expect(mute).toHaveAccessibleName('Mute the microphone');
+    await expect(mute).not.toHaveAttribute('aria-pressed');
     expect((await trackState(page)).audio).toBe(true);
 
     await mute.click();
-    await expect(mute).toHaveAttribute('aria-pressed', 'true');
+    await expect(mute).toHaveAccessibleName('Unmute the microphone');
     expect((await trackState(page)).audio).toBe(false);
   });
 
@@ -713,7 +873,7 @@ test.describe('camera and microphone toggles', () => {
     await openTab(page, 'Source');
 
     expect((await trackState(page)).audio).toBe(false);
-    await expect(page.locator('#mute-toggle')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('#mute-toggle')).toHaveAccessibleName('Unmute the microphone');
   });
 
   test('the camera toggle behaves the same way', async ({ page }) => {
@@ -722,15 +882,26 @@ test.describe('camera and microphone toggles', () => {
     await openTab(page, 'Source');
     expect(await captureTracks(page)).toBe(true);
 
-    await page.locator('#camera-toggle').click();
+    const camera = page.locator('#camera-toggle');
+    await expect(camera).toHaveAccessibleName('Turn the camera off');
+    await expect(camera).not.toHaveAttribute('aria-pressed');
+
+    await camera.click();
     expect((await trackState(page)).video).toBe(false);
-    await expect(page.locator('#camera-toggle')).toHaveAttribute('aria-pressed', 'true');
+    await expect(camera).toHaveAccessibleName('Turn the camera on');
   });
 
-  // Pressing either with no device would throw inside the reducer.
+  // Pressing either with no device would throw inside the reducer. The capture is held
+  // pending, so the page stays in the moment before any track exists.
   test('neither can be pressed before there is a track to switch', async ({ page }) => {
-    await page.goto('/#/play');
-    await expect(page.locator('#mute-toggle')).toHaveCount(0);
+    await page.addInitScript(() => {
+      navigator.mediaDevices.getUserMedia = () => new Promise(() => {});
+    });
+    await page.goto('/#/publish');
+    await openTab(page, 'Source');
+
+    await expect(page.locator('#camera-toggle')).toBeDisabled();
+    await expect(page.locator('#mute-toggle')).toBeDisabled();
   });
 });
 

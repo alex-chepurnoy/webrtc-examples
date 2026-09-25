@@ -68,7 +68,8 @@ const RecentInput = ({
         return next;
       });
     } else if (event.key === 'Enter' && highlighted >= 0) {
-      // Only when a row is highlighted, so Enter on a typed value still submits the form.
+      // Only when a row is highlighted. Otherwise Enter is left alone: the settings forms
+      // have no submit button and several fields, so it does nothing there.
       event.preventDefault();
       choose(matches[highlighted]);
     } else if (event.key === 'Delete' && highlighted >= 0 && onForget) {
@@ -93,7 +94,8 @@ const RecentInput = ({
           disabled={disabled}
           role="combobox"
           aria-expanded={shown}
-          aria-controls={listId}
+          /* Only while the list exists: an id that points at nothing is a broken reference. */
+          aria-controls={shown ? listId : undefined}
           aria-autocomplete="list"
           aria-activedescendant={highlighted >= 0 ? `${generatedId}-${highlighted}` : undefined}
           onChange={(e) => { onChange(e.target.value); setOpen(true); }}
