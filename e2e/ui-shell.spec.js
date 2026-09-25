@@ -558,6 +558,26 @@ test.describe('remembered values dropdown', () => {
     await expect(page.locator('#streamName-recent .wz-recent__value')).toHaveText(['keep']);
   });
 
+  test('points at its list only while the list is there', async ({ page }) => {
+    await page.goto('/#/publish');
+    await remember(page, 'wz.recent.streamName', ['alpha']);
+    await page.reload();
+
+    const field = page.locator('#streamName');
+    await expect(field).not.toHaveAttribute('aria-controls');
+    await page.locator('#streamName-recent-toggle').click();
+    await expect(field).toHaveAttribute('aria-controls', 'streamName-recent');
+  });
+
+  // No submit button and several fields, so the form has no implicit submission to trigger.
+  test('Enter on a typed value leaves the page alone', async ({ page }) => {
+    await page.goto('/#/publish');
+    await page.fill('#streamName', 'typed');
+    await page.locator('#streamName').press('Enter');
+    await expect(page).toHaveURL(/#\/publish$/);
+    await expect(page.locator('#streamName')).toHaveValue('typed');
+  });
+
   test('typing filters, and a new value is still typed straight over them', async ({ page }) => {
     await page.goto('/#/publish');
     await remember(page, 'wz.recent.streamName', ['alpha', 'beta']);
