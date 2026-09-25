@@ -204,31 +204,64 @@ test.describe('theme', () => {
     expect(await theme()).toBe(after);
   });
 
-  test('no text loses contrast against the light surface', async ({ page }) => {
-    await page.goto('/#/publish');
-    await page.evaluate(() => document.documentElement.setAttribute('data-bs-theme', 'light'));
+  // WCAG AA for body text is 4.5:1. Each element is measured against what is actually behind
+  // it, composited up through its ancestors, so the tinted ground of the active rail item
+  // counts rather than the panel it sits on.
+  for (const theme of ['light', 'dark']) {
+    test(`no text loses contrast against its ground (${theme})`, async ({ page }) => {
+      await page.goto('/#/publish');
+      await page.evaluate((t) => document.documentElement.setAttribute('data-bs-theme', t), theme);
+      // Expanded, so the rail's labels are on screen as text.
+      await page.getByRole('button', { name: 'Expand navigation' }).click();
 
-    // A token that did not get a light value would leave near-white text on white.
-    const unreadable = await page.evaluate(() => {
-      const luminance = (colour) => {
-        const [r, g, b] = colour.match(/\d+/g).slice(0, 3).map(Number);
-        const channel = (c) => { const v = c / 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };
-        return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
-      };
-      const bad = [];
-      document.querySelectorAll('.wz-inspector label, .wz-topbar__title, .wz-stat__label, .wz-stat__value')
-        .forEach((el) => {
-          const style = getComputedStyle(el);
-          const text = luminance(style.color);
-          const behind = luminance(getComputedStyle(document.querySelector('.wz-inspector')).backgroundColor);
+      const unreadable = await page.evaluate(() => {
+        // Computed colours come back as rgb()/rgba(), or as color(srgb ...) from color-mix().
+        const parse = (colour) => {
+          const n = (colour.match(/[\d.]+/g) || []).map(Number);
+          if (colour.startsWith('color(')) {
+            return { rgb: n.slice(0, 3).map((v) => v * 255), a: n.length > 3 ? n[3] : 1 };
+          }
+          return { rgb: n.slice(0, 3), a: n.length > 3 ? n[3] : 1 };
+        };
+        const ground = (el) => {
+          const layers = [];
+          for (let node = el; node; node = node.parentElement) {
+            const layer = parse(getComputedStyle(node).backgroundColor);
+            if (layer.a > 0) layers.push(layer);
+            if (layer.a >= 1) break;
+          }
+          let rgb = [255, 255, 255];
+          for (const { rgb: top, a } of layers.reverse()) rgb = rgb.map((c, i) => top[i] * a + c * (1 - a));
+          return rgb;
+        };
+        const luminance = (rgb) => {
+          const channel = (c) => { const v = c / 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };
+          return 0.2126 * channel(rgb[0]) + 0.7152 * channel(rgb[1]) + 0.0722 * channel(rgb[2]);
+        };
+
+        const bad = [];
+        const measured = document.querySelectorAll([
+          '.wz-inspector label',
+          '.wz-topbar__title',
+          '.wz-stat__label',
+          '.wz-stat__value',
+          '.wz-rail__link',
+          '.wz-tabs button',
+        ].join(', '));
+        measured.forEach((el) => {
+          const text = luminance(parse(getComputedStyle(el).color).rgb);
+          const behind = luminance(ground(el));
           const ratio = (Math.max(text, behind) + 0.05) / (Math.min(text, behind) + 0.05);
-          if (ratio < 3) bad.push(`${el.className || el.tagName}: ${style.color} ratio ${ratio.toFixed(2)}`);
+          if (ratio < 4.5) bad.push(`${el.className || el.tagName}: ${getComputedStyle(el).color} ratio ${ratio.toFixed(2)}`);
         });
-      return bad;
-    });
+        return { bad, count: measured.length, rail: document.querySelectorAll('.wz-rail__link--active').length };
+      });
 
-    expect(unreadable, unreadable.join(' | ')).toEqual([]);
-  });
+      expect(unreadable.rail, 'the active rail item is measured').toBe(1);
+      expect(unreadable.count).toBeGreaterThan(10);
+      expect(unreadable.bad, unreadable.bad.join(' | ')).toEqual([]);
+    });
+  }
 });
 
 

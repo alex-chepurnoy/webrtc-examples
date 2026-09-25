@@ -89,13 +89,15 @@
   align-self: center;
 }
 
+/* The tint and the edge are the brand orange; the label and icon take the text form of it,
+   which is darker in light mode so it clears 4.5:1 on the tint. See tokens.css. */
 .wz-rail__link--active {
   background: color-mix(in srgb, var(--wz-accent) 18%, transparent);
   border-left-color: var(--wz-accent);
-  color: var(--wz-accent);
+  color: var(--wz-accent-text);
 }
 
-.wz-rail__link--active:hover { color: var(--wz-accent); }
+.wz-rail__link--active:hover { color: var(--wz-accent-text); }
 
 .wz-rail__label { font-size: 13px; font-weight: 500; }
 .wz-rail__link--active .wz-rail__label { font-weight: 600; }
