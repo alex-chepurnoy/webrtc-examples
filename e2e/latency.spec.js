@@ -1247,11 +1247,24 @@ test.describe('burned-in clock', () => {
     for (let i = 0; i < data.length; i += 4) {
       luma += 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
     }
-    // The clock's digits, which change every frame: the plate row the text sits in.
-    const text = ctx.getImageData(0, 0, Math.min(canvas.width, 200), 40).data;
+    /*
+     * The clock's digits, which change every frame. The plate scales with the frame height, so
+     * a fixed 200 px box reaches only the seconds at 1280x720 and 300 ms usually shows no
+     * change: find the plate's edges (where the black ends along its top row and left column)
+     * and sum everything inside it, milliseconds included.
+     */
+    const dark = (x, y) => {
+      const [r, g, b] = ctx.getImageData(x, y, 1, 1).data;
+      return 0.299 * r + 0.587 * g + 0.114 * b < 40;
+    };
+    let plateWidth = 0;
+    while (plateWidth < canvas.width && dark(plateWidth, 1)) plateWidth += 1;
+    let plateHeight = 0;
+    while (plateHeight < canvas.height && dark(1, plateHeight)) plateHeight += 1;
+    const text = ctx.getImageData(0, 0, Math.max(plateWidth, 1), Math.max(plateHeight, 1)).data;
     let sum = 0;
     for (let i = 0; i < text.length; i += 4) sum = (sum * 31 + text[i]) % 1_000_003;
-    return { luma: luma / (size * size), textSum: sum };
+    return { luma: luma / (size * size), textSum: sum, plate: `${plateWidth}x${plateHeight}` };
   });
 
   const hookConnections = (page) => page.addInitScript(() => {
