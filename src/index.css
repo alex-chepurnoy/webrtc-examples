@@ -3,7 +3,6 @@
  * so the built page still loads nothing from a third-party origin at runtime.
  */
 @import "@fontsource-variable/inter";
-@import "./styles/tokens.css";
 
 * {
   box-sizing: border-box;

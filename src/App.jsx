@@ -15,6 +15,8 @@ import Play from './components/play/Play';
 import Publish from './components/publish/Publish';
 import Loopback from './components/loopback/Loopback';
 import './styles/bootstrap.scss';
+// After Bootstrap, so the --bs-* overrides in it win. See the note at the foot of tokens.css.
+import './styles/tokens.css';
 import './styles/shell.css';
 import './styles/inspector.css';
 import './styles/header.css';

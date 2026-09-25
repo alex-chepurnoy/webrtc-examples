@@ -863,6 +863,37 @@ test.describe('panel structure', () => {
 });
 
 test.describe('theme colors', () => {
+  // tokens.css and Bootstrap declare the same --bs-* properties on selectors of equal weight,
+  // so whichever loads last wins. Loaded first, the overrides were dead in both themes.
+  for (const theme of ['dark', 'light']) {
+    test(`the token overrides beat Bootstrap's own values (${theme})`, async ({ page }) => {
+      await page.goto('/#/publish');
+      const seen = await page.evaluate((t) => {
+        document.documentElement.setAttribute('data-bs-theme', t);
+        const probe = (css) => {
+          const el = document.createElement('span');
+          el.style.color = css;
+          document.body.appendChild(el);
+          const out = getComputedStyle(el).color;
+          el.remove();
+          return out;
+        };
+        const root = getComputedStyle(document.documentElement);
+        const link = getComputedStyle(document.querySelector('.wz-inspector__foot a')).color;
+        return {
+          bodyBg: probe(root.getPropertyValue('--bs-body-bg')),
+          wzBg: probe(root.getPropertyValue('--wz-bg')),
+          link,
+          accentText: probe(root.getPropertyValue('--wz-accent-text')),
+        };
+      }, theme);
+
+      expect(seen.bodyBg, '--bs-body-bg should be the token ground, not #fff or #212529')
+        .toBe(seen.wzBg);
+      expect(seen.link, 'links should take the accent, not Bootstrap blue').toBe(seen.accentText);
+    });
+  }
+
   // A hover wash has to pull away from the surface under it: lighter on a dark panel,
   // darker on a light one.
   test('the hover wash pulls away from the surface in both themes', async ({ page }) => {
