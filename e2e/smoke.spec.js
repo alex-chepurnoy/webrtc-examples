@@ -21,6 +21,14 @@ test.describe('app shell', () => {
     expect(errors, errors.join('\n')).toEqual([]);
   });
 
+  // App.jsx still routes / to /publish; without this nothing would notice that going.
+  test('the root path redirects to the publish page', async ({ page }) => {
+    await page.goto('/');
+    await expect(page).toHaveURL(/#\/publish$/);
+    await expect(page.locator('#top-nav')).toBeVisible();
+    await expect(page.locator('#publish-settings')).toBeVisible();
+  });
+
   test('the nav links reach all three pages', async ({ page }) => {
     await page.goto('/#/publish');
     await page.getByRole('link', { name: 'Play', exact: true }).click();

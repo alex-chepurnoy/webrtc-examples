@@ -71,6 +71,85 @@ test.describe('settings panel', () => {
 });
 
 
+test.describe('small screens', () => {
+  // At 375px the desktop columns left the stage 14px wide, and the shell was clipped to the
+  // viewport, so the settings could not be scrolled to either.
+  for (const route of ['#/publish', '#/play', '#/loopback']) {
+    test(`a phone gets a usable stage and can scroll to the settings (${route})`, async ({ page }) => {
+      await page.setViewportSize({ width: 375, height: 812 });
+      await page.goto(`/${route}`);
+
+      const layout = await page.evaluate(() => {
+        const rect = (el) => el.getBoundingClientRect();
+        const videos = [...document.querySelectorAll('.wz-stage__video, .wz-loopback__video')].map(rect);
+        return {
+          videos: videos.map((r) => ({ width: r.width, height: r.height })),
+          rail: rect(document.querySelector('.wz-rail')),
+          docHeight: document.scrollingElement.scrollHeight,
+          docWidth: document.scrollingElement.scrollWidth,
+          viewport: { width: window.innerWidth, height: window.innerHeight },
+        };
+      });
+
+      expect(layout.videos.length).toBeGreaterThan(0);
+      for (const video of layout.videos) {
+        expect(video.width, 'the stage video is at least most of the screen wide').toBeGreaterThan(300);
+        expect(video.height, 'the stage video has a real height').toBeGreaterThanOrEqual(160);
+      }
+      // The rail is a bar across the top, not a column eating the width.
+      expect(layout.rail.width).toBe(layout.viewport.width);
+      expect(layout.rail.height).toBeLessThan(80);
+      expect(layout.docWidth, 'no sideways scroll').toBeLessThanOrEqual(layout.viewport.width);
+      expect(layout.docHeight, 'the page scrolls').toBeGreaterThan(layout.viewport.height);
+
+      // The settings are below the stage and reachable by scrolling the page.
+      const inspector = page.locator('.wz-inspector');
+      await inspector.scrollIntoViewIfNeeded();
+      await expect(inspector).toBeInViewport();
+      const box = await inspector.boundingBox();
+      expect(box.width).toBeGreaterThanOrEqual(layout.viewport.width - 1);
+      expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
+      await expect(page.locator('.wz-tabs [role="tab"]').first()).toBeVisible();
+
+      // The rail stays on screen while the page is scrolled.
+      await expect(page.locator('.wz-rail')).toBeInViewport();
+    });
+  }
+
+  test('the desktop layout is unchanged at 768px and up', async ({ page }) => {
+    await page.setViewportSize({ width: 1024, height: 768 });
+    await page.goto('/#/publish');
+    const layout = await page.evaluate(() => ({
+      rail: document.querySelector('.wz-rail').getBoundingClientRect().width,
+      app: document.querySelector('.wz-app').getBoundingClientRect().height,
+      docHeight: document.scrollingElement.scrollHeight,
+    }));
+    expect(layout.rail).toBe(60);
+    expect(layout.app).toBe(768);
+    expect(layout.docHeight).toBe(768);
+  });
+
+  test('the dark theme holds on a phone', async ({ page }) => {
+    await page.setViewportSize({ width: 375, height: 812 });
+    await page.goto('/#/publish');
+    await page.evaluate(() => document.documentElement.setAttribute('data-bs-theme', 'dark'));
+    const colors = await page.evaluate(() => ({
+      rail: getComputedStyle(document.querySelector('.wz-rail')).backgroundColor,
+      inspector: getComputedStyle(document.querySelector('.wz-inspector')).backgroundColor,
+      surface: (() => {
+        const probe = document.createElement('span');
+        probe.style.color = getComputedStyle(document.documentElement).getPropertyValue('--wz-surface');
+        document.body.appendChild(probe);
+        const out = getComputedStyle(probe).color;
+        probe.remove();
+        return out;
+      })(),
+    }));
+    expect(colors.rail).toBe(colors.surface);
+    expect(colors.inspector).toBe(colors.surface);
+  });
+});
+
 test.describe('shell alignment', () => {
   // The topbar rule and the tab-strip rule read as one line, so they share a pixel.
   test('the topbar rule and the tab rule share a line', async ({ page }) => {
@@ -204,31 +283,64 @@ test.describe('theme', () => {
     expect(await theme()).toBe(after);
   });
 
-  test('no text loses contrast against the light surface', async ({ page }) => {
-    await page.goto('/#/publish');
-    await page.evaluate(() => document.documentElement.setAttribute('data-bs-theme', 'light'));
+  // WCAG AA for body text is 4.5:1. Each element is measured against what is actually behind
+  // it, composited up through its ancestors, so the tinted ground of the active rail item
+  // counts rather than the panel it sits on.
+  for (const theme of ['light', 'dark']) {
+    test(`no text loses contrast against its ground (${theme})`, async ({ page }) => {
+      await page.goto('/#/publish');
+      await page.evaluate((t) => document.documentElement.setAttribute('data-bs-theme', t), theme);
+      // Expanded, so the rail's labels are on screen as text.
+      await page.getByRole('button', { name: 'Expand navigation' }).click();
 
-    // A token that did not get a light value would leave near-white text on white.
-    const unreadable = await page.evaluate(() => {
-      const luminance = (colour) => {
-        const [r, g, b] = colour.match(/\d+/g).slice(0, 3).map(Number);
-        const channel = (c) => { const v = c / 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };
-        return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
-      };
-      const bad = [];
-      document.querySelectorAll('.wz-inspector label, .wz-topbar__title, .wz-stat__label, .wz-stat__value')
-        .forEach((el) => {
-          const style = getComputedStyle(el);
-          const text = luminance(style.color);
-          const behind = luminance(getComputedStyle(document.querySelector('.wz-inspector')).backgroundColor);
+      const unreadable = await page.evaluate(() => {
+        // Computed colours come back as rgb()/rgba(), or as color(srgb ...) from color-mix().
+        const parse = (colour) => {
+          const n = (colour.match(/[\d.]+/g) || []).map(Number);
+          if (colour.startsWith('color(')) {
+            return { rgb: n.slice(0, 3).map((v) => v * 255), a: n.length > 3 ? n[3] : 1 };
+          }
+          return { rgb: n.slice(0, 3), a: n.length > 3 ? n[3] : 1 };
+        };
+        const ground = (el) => {
+          const layers = [];
+          for (let node = el; node; node = node.parentElement) {
+            const layer = parse(getComputedStyle(node).backgroundColor);
+            if (layer.a > 0) layers.push(layer);
+            if (layer.a >= 1) break;
+          }
+          let rgb = [255, 255, 255];
+          for (const { rgb: top, a } of layers.reverse()) rgb = rgb.map((c, i) => top[i] * a + c * (1 - a));
+          return rgb;
+        };
+        const luminance = (rgb) => {
+          const channel = (c) => { const v = c / 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };
+          return 0.2126 * channel(rgb[0]) + 0.7152 * channel(rgb[1]) + 0.0722 * channel(rgb[2]);
+        };
+
+        const bad = [];
+        const measured = document.querySelectorAll([
+          '.wz-inspector label',
+          '.wz-topbar__title',
+          '.wz-stat__label',
+          '.wz-stat__value',
+          '.wz-rail__link',
+          '.wz-tabs button',
+        ].join(', '));
+        measured.forEach((el) => {
+          const text = luminance(parse(getComputedStyle(el).color).rgb);
+          const behind = luminance(ground(el));
           const ratio = (Math.max(text, behind) + 0.05) / (Math.min(text, behind) + 0.05);
-          if (ratio < 3) bad.push(`${el.className || el.tagName}: ${style.color} ratio ${ratio.toFixed(2)}`);
+          if (ratio < 4.5) bad.push(`${el.className || el.tagName}: ${getComputedStyle(el).color} ratio ${ratio.toFixed(2)}`);
         });
-      return bad;
-    });
+        return { bad, count: measured.length, rail: document.querySelectorAll('.wz-rail__link--active').length };
+      });
 
-    expect(unreadable, unreadable.join(' | ')).toEqual([]);
-  });
+      expect(unreadable.rail, 'the active rail item is measured').toBe(1);
+      expect(unreadable.count).toBeGreaterThan(10);
+      expect(unreadable.bad, unreadable.bad.join(' | ')).toEqual([]);
+    });
+  }
 });
 
 
@@ -534,6 +646,21 @@ test.describe('assets', () => {
       .filter((r) => /bootstrap-icons/.test(r.name)).length);
     expect(fontRequests).toBe(0);
   });
+
+  // index.css and index.html both promise this; the Engine a reader types in is the only
+  // other origin the page should ever reach, and no test here configures one.
+  test('nothing loads from another origin', async ({ page, baseURL }) => {
+    const foreign = [];
+    page.on('request', (request) => {
+      const url = request.url();
+      if (!url.startsWith(baseURL) && !/^(data|blob):/.test(url)) foreign.push(url);
+    });
+    for (const route of ['#/publish', '#/play', '#/loopback']) {
+      await page.goto(`/${route}`);
+      await page.waitForLoadState('networkidle');
+    }
+    expect(foreign, foreign.join('\n')).toEqual([]);
+  });
 });
 
 /*
@@ -728,6 +855,49 @@ test.describe('field layout', () => {
 });
 
 // The selected tab is bold, and bold is wider. Held to the pixel: the labels must not move.
+test.describe('tab keyboard', () => {
+  // The WAI-ARIA tabs pattern: one Tab stop, arrows and Home/End move the selection.
+  test('the arrow keys, Home and End move along the tabs, with one Tab stop', async ({ page }) => {
+    await page.goto('/#/publish');
+    const tabs = page.getByRole('tab');
+    const selected = page.locator('.wz-tabs [role="tab"][aria-selected="true"]');
+
+    // Roving tabindex: only the selected tab is in the Tab order.
+    await expect(tabs).toHaveCount(3);
+    expect(await tabs.evaluateAll((els) => els.map((el) => el.tabIndex))).toEqual([0, -1, -1]);
+
+    await tabs.first().focus();
+    await page.keyboard.press('ArrowRight');
+    await expect(selected).toHaveText('Source');
+    await expect(page.getByRole('tab', { name: 'Source' })).toBeFocused();
+    expect(await tabs.evaluateAll((els) => els.map((el) => el.tabIndex))).toEqual([-1, 0, -1]);
+
+    await page.keyboard.press('End');
+    await expect(selected).toHaveText('Advanced');
+    await page.keyboard.press('ArrowRight');
+    await expect(selected).toHaveText('Connection');
+    await page.keyboard.press('ArrowLeft');
+    await expect(selected).toHaveText('Advanced');
+    await page.keyboard.press('Home');
+    await expect(selected).toHaveText('Connection');
+    await expect(page.getByRole('tab', { name: 'Connection' })).toBeFocused();
+  });
+
+  test('a tab only points at a panel that is in the page', async ({ page }) => {
+    await page.goto('/#/publish');
+    await openTab(page, 'Source');
+    const dangling = await page.evaluate(() => [...document.querySelectorAll('[role="tab"]')]
+      .filter((tab) => {
+        const id = tab.getAttribute('aria-controls');
+        return id !== null && !document.getElementById(id);
+      })
+      .map((tab) => tab.id));
+    expect(dangling).toEqual([]);
+    await expect(page.getByRole('tab', { name: 'Source' })).toHaveAttribute('aria-controls', 'panel-source');
+    await expect(page.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', 'tab-source');
+  });
+});
+
 test.describe('tab stability', () => {
   test('the tab labels do not move when the selection changes', async ({ page }) => {
     await page.goto('/#/publish');
@@ -762,6 +932,40 @@ test.describe('tab stability', () => {
   });
 });
 
+
+test.describe('browser chrome color', () => {
+  // theme-color used to follow only the OS setting, so a reader who chose light on a dark OS
+  // got a dark browser bar over a light page.
+  test('theme-color follows the chosen theme, not the OS', async ({ page }) => {
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await page.goto('/#/publish');
+
+    const chrome = () => page.evaluate(() => {
+      const live = [...document.querySelectorAll('meta[name="theme-color"]')]
+        .filter((meta) => !meta.media || window.matchMedia(meta.media).matches);
+      return {
+        theme: document.documentElement.getAttribute('data-bs-theme'),
+        colors: live.map((meta) => meta.content.toLowerCase()),
+        ground: getComputedStyle(document.documentElement).getPropertyValue('--wz-bg').trim().toLowerCase(),
+      };
+    });
+
+    const before = await chrome();
+    expect(before.theme).toBe('dark');
+    expect(before.colors).toEqual([before.ground]);
+
+    await page.locator('#theme-toggle').click();
+    const after = await chrome();
+    expect(after.theme).toBe('light');
+    expect(after.colors, 'one theme-color, the light ground').toEqual([after.ground]);
+
+    // The inline script in index.html applies the remembered choice before the app mounts.
+    await page.reload();
+    const reloaded = await chrome();
+    expect(reloaded.theme).toBe('light');
+    expect(reloaded.colors).toEqual([reloaded.ground]);
+  });
+});
 
 test.describe('theme on first paint', () => {
   // The inline script in index.html sets the theme before the bundle mounts, so a
@@ -843,9 +1047,71 @@ test.describe('panel structure', () => {
     await page.goto('/#/play');
     await expect(page.locator('.wz-inspector__foot')).toBeVisible();
   });
+
+  // The link is the last thing in the message, so it is what an ellipsis cuts off first.
+  // Checked at the default panel width and at the narrowest the panel resizes to.
+  for (const width of [340, 280]) {
+    test(`the legacy Engine link is on screen at a ${width}px panel`, async ({ page }) => {
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await page.goto('/#/publish');
+      await page.evaluate((w) => window.localStorage.setItem('wz.inspector.width', String(w)), width);
+      await page.reload();
+
+      const link = page.locator('.wz-inspector__foot a');
+      await expect(link).toBeVisible();
+      await expect(link).toHaveText('Go here');
+
+      const box = await page.evaluate(() => {
+        const a = document.querySelector('.wz-inspector__foot a').getBoundingClientRect();
+        const small = document.querySelector('.wz-inspector__foot small');
+        const clip = small.getBoundingClientRect();
+        const foot = document.querySelector('.wz-inspector__foot').getBoundingClientRect();
+        return {
+          inside: a.left >= clip.left - 0.5 && a.right <= clip.right + 0.5
+            && a.top >= foot.top - 0.5 && a.bottom <= foot.bottom + 0.5,
+          clipped: small.scrollWidth > small.clientWidth || small.scrollHeight > small.clientHeight,
+          panel: document.querySelector('.wz-inspector').getBoundingClientRect().width,
+        };
+      });
+      expect(box.panel).toBeCloseTo(width, 0);
+      expect(box.clipped, 'the message overflows its box').toBe(false);
+      expect(box.inside, 'the link sits inside the foot').toBe(true);
+    });
+  }
 });
 
 test.describe('theme colors', () => {
+  // tokens.css and Bootstrap declare the same --bs-* properties on selectors of equal weight,
+  // so whichever loads last wins. Loaded first, the overrides were dead in both themes.
+  for (const theme of ['dark', 'light']) {
+    test(`the token overrides beat Bootstrap's own values (${theme})`, async ({ page }) => {
+      await page.goto('/#/publish');
+      const seen = await page.evaluate((t) => {
+        document.documentElement.setAttribute('data-bs-theme', t);
+        const probe = (css) => {
+          const el = document.createElement('span');
+          el.style.color = css;
+          document.body.appendChild(el);
+          const out = getComputedStyle(el).color;
+          el.remove();
+          return out;
+        };
+        const root = getComputedStyle(document.documentElement);
+        const link = getComputedStyle(document.querySelector('.wz-inspector__foot a')).color;
+        return {
+          bodyBg: probe(root.getPropertyValue('--bs-body-bg')),
+          wzBg: probe(root.getPropertyValue('--wz-bg')),
+          link,
+          accentText: probe(root.getPropertyValue('--wz-accent-text')),
+        };
+      }, theme);
+
+      expect(seen.bodyBg, '--bs-body-bg should be the token ground, not #fff or #212529')
+        .toBe(seen.wzBg);
+      expect(seen.link, 'links should take the accent, not Bootstrap blue').toBe(seen.accentText);
+    });
+  }
+
   // A hover wash has to pull away from the surface under it: lighter on a dark panel,
   // darker on a light one.
   test('the hover wash pulls away from the surface in both themes', async ({ page }) => {

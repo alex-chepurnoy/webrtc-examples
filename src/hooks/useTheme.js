@@ -33,6 +33,11 @@ export const useTheme = () => {
   useEffect(() => {
     document.documentElement.setAttribute('data-bs-theme', theme);
     document.documentElement.style.colorScheme = theme;
+    // The theme-color tags carry media queries on the OS setting, which is wrong once the
+    // reader picks the other theme here: switch on the tag for this theme and off the other.
+    document.querySelectorAll('meta[name="theme-color"][data-theme]').forEach((meta) => {
+      meta.setAttribute('media', meta.getAttribute('data-theme') === theme ? 'all' : 'not all');
+    });
   }, [theme]);
 
   // Keep following the system until the reader picks a side.

@@ -2,6 +2,14 @@
 <html lang="en" data-bs-theme="dark">
   <head>
     <meta charset="utf-8" />
+    <!--
+      The only colors outside tokens.css; each tracks --wz-bg for its theme so the browser
+      chrome matches. The media queries are the OS default for a first visit. The script below
+      and src/hooks/useTheme.js point both at the theme actually in use, since a reader can
+      choose one against the OS setting. They sit above the script so it can reach them.
+    -->
+    <meta name="theme-color" content="#0b141d" media="(prefers-color-scheme: dark)" data-theme="dark" />
+    <meta name="theme-color" content="#f4f7fa" media="(prefers-color-scheme: light)" data-theme="light" />
     <!-- Applies the saved theme before the first paint, so a light choice does not flash dark.
          The storage key is shared with src/hooks/useTheme.js. -->
     <script>
@@ -15,6 +23,10 @@
               : 'dark');
           document.documentElement.setAttribute('data-bs-theme', theme);
           document.documentElement.style.colorScheme = theme;
+          var metas = document.querySelectorAll('meta[name="theme-color"][data-theme]');
+          for (var i = 0; i < metas.length; i++) {
+            metas[i].setAttribute('media', metas[i].getAttribute('data-theme') === theme ? 'all' : 'not all');
+          }
         } catch (e) {
           // Storage can be blocked. The attribute above is the fallback, so there is
           // nothing to do here but carry on.
@@ -23,9 +35,6 @@
     </script>
     <meta name="robots" content="noindex, nofollow" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <!-- The only color outside tokens.css; it tracks --wz-bg so the browser chrome matches. -->
-    <meta name="theme-color" content="#0b141d" media="(prefers-color-scheme: dark)" />
-    <meta name="theme-color" content="#f4f7fa" media="(prefers-color-scheme: light)" />
     <meta name="description" content="Wowza WebRTC publish and playback example pages" />
     <link rel="icon" href="./favicon.ico" />
     <link rel="apple-touch-icon" href="./logo192.png" />

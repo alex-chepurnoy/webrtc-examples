@@ -104,6 +104,14 @@
   --wz-accent-contrast: var(--wz-navy-900);
 
   /*
+   * The accent when it is the colour of text rather than of a fill, border or rule. On the
+   * dark surfaces the brand orange is readable as it is (7.0 against --wz-surface), so here
+   * the two are the same colour. Light mode is where they part; see below.
+   */
+  --wz-accent-text: var(--wz-orange-500);
+  --wz-accent-text-hover: var(--wz-orange-600);
+
+  /*
    * Hover wash. It has to be a theme token rather than the white one it used to be: a 5
    * percent white overlay is invisible on a white panel, which is exactly what light mode
    * looked like. Dark lifts, light darkens.
@@ -150,6 +158,16 @@
   --wz-accent-hover: var(--wz-orange-600);
   --wz-accent-contrast: var(--wz-white);
 
+  /*
+   * The brand orange is 2.46 against white, and 2.08 on the orange-tinted ground of the active
+   * rail item, so as text it fails WCAG AA in light mode. Fills, borders and rules keep
+   * --wz-accent; text takes this darker orange of the same hue instead: 5.79 on white, 4.91 on
+   * the active rail item and 4.97 on that item under the hover wash. The hover step goes
+   * darker still, so hovering a link never lowers its contrast.
+   */
+  --wz-accent-text: #a64b00;
+  --wz-accent-text-hover: #8f4200;
+
   --wz-hover: rgba(1, 48, 83, 0.08);
 
   --wz-video-bg: var(--wz-navy-800);
@@ -164,6 +182,13 @@
 /*
  * Bootstrap 5.3 reads these at runtime, so overriding them re-themes the built-in
  * components without recompiling Bootstrap's Sass.
+ *
+ * Bootstrap declares the same properties on the same selectors (:root, [data-bs-theme=light]
+ * and [data-bs-theme=dark]), so neither side wins on specificity and the later stylesheet
+ * takes them. This file therefore has to load after Bootstrap: App.jsx imports it straight
+ * after src/styles/bootstrap.scss, and e2e/ui-shell.spec.js fails if Bootstrap's values come
+ * back. Loaded first, as it used to be from index.css, every one of these was dead: links
+ * stayed Bootstrap blue and fields and cards sat on #212529 in dark mode.
  */
 :root,
 [data-bs-theme="dark"],
@@ -176,8 +201,24 @@
   --bs-border-color: var(--wz-border);
   --bs-secondary-color: var(--wz-text-muted);
   --bs-emphasis-color: var(--wz-text);
-  --bs-link-color: var(--wz-accent);
-  --bs-link-hover-color: var(--wz-accent-hover);
+  --bs-link-color: var(--wz-accent-text);
+  --bs-link-hover-color: var(--wz-accent-text-hover);
   --bs-border-radius: var(--wz-radius-sm);
   --bs-focus-ring-color: var(--wz-focus-ring);
+}
+
+/*
+ * Bootstrap paints a link with rgba(var(--bs-link-color-rgb), ...), not with --bs-link-color,
+ * so the channel triples are what actually colour it. They cannot be derived from a var(), so
+ * they are written out per theme and must match --wz-accent-text and --wz-accent-text-hover.
+ */
+:root,
+[data-bs-theme="dark"] {
+  --bs-link-color-rgb: 255, 132, 0;
+  --bs-link-hover-color-rgb: 244, 123, 32;
+}
+
+[data-bs-theme="light"] {
+  --bs-link-color-rgb: 166, 75, 0;
+  --bs-link-hover-color-rgb: 143, 66, 0;
 }
