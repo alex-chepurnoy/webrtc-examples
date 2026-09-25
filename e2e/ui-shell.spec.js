@@ -584,6 +584,21 @@ test.describe('assets', () => {
       .filter((r) => /bootstrap-icons/.test(r.name)).length);
     expect(fontRequests).toBe(0);
   });
+
+  // index.css and index.html both promise this; the Engine a reader types in is the only
+  // other origin the page should ever reach, and no test here configures one.
+  test('nothing loads from another origin', async ({ page, baseURL }) => {
+    const foreign = [];
+    page.on('request', (request) => {
+      const url = request.url();
+      if (!url.startsWith(baseURL) && !/^(data|blob):/.test(url)) foreign.push(url);
+    });
+    for (const route of ['#/publish', '#/play', '#/loopback']) {
+      await page.goto(`/${route}`);
+      await page.waitForLoadState('networkidle');
+    }
+    expect(foreign, foreign.join('\n')).toEqual([]);
+  });
 });
 
 /*

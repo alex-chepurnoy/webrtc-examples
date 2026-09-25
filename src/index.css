@@ -1,6 +1,9 @@
 /*
- * Inter is installed from npm and bundled by Vite rather than pulled from Google Fonts,
- * so the built page still loads nothing from a third-party origin at runtime.
+ * Inter is installed from npm and bundled by Vite rather than pulled from Google Fonts.
+ * With Bootstrap from npm and the icons inline (see index.html), the built page loads
+ * nothing from a third-party origin at runtime; the only other origin it talks to is the
+ * Engine the reader enters. e2e/ui-shell.spec.js ("nothing loads from another origin")
+ * holds it to that.
  */
 @import "@fontsource-variable/inter";
 
