@@ -630,8 +630,10 @@ test.describe('assets', () => {
 });
 
 /*
- * The toggles render from MediaStreamTrack.enabled, not a copy in component state, so a
- * remount cannot show a live microphone over a muted track.
+ * The toggles render from the store's videoEnabled and audioEnabled flags, which
+ * TrackEnabledSync applies to the tracks, not from a copy in component state, so a remount
+ * cannot show a live microphone over a muted track. Each label names the action it takes and
+ * flips with it; there is no aria-pressed on top of that.
  */
 test.describe('camera and microphone toggles', () => {
 
@@ -656,11 +658,12 @@ test.describe('camera and microphone toggles', () => {
     expect(await captureTracks(page)).toBe(true);
 
     const mute = page.locator('#mute-toggle');
-    await expect(mute).toHaveAttribute('aria-pressed', 'false');
+    await expect(mute).toHaveAccessibleName('Mute the microphone');
+    await expect(mute).not.toHaveAttribute('aria-pressed');
     expect((await trackState(page)).audio).toBe(true);
 
     await mute.click();
-    await expect(mute).toHaveAttribute('aria-pressed', 'true');
+    await expect(mute).toHaveAccessibleName('Unmute the microphone');
     expect((await trackState(page)).audio).toBe(false);
   });
 
@@ -679,7 +682,7 @@ test.describe('camera and microphone toggles', () => {
     await openTab(page, 'Source');
 
     expect((await trackState(page)).audio).toBe(false);
-    await expect(page.locator('#mute-toggle')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('#mute-toggle')).toHaveAccessibleName('Unmute the microphone');
   });
 
   test('the camera toggle behaves the same way', async ({ page }) => {
@@ -688,15 +691,26 @@ test.describe('camera and microphone toggles', () => {
     await openTab(page, 'Source');
     expect(await captureTracks(page)).toBe(true);
 
-    await page.locator('#camera-toggle').click();
+    const camera = page.locator('#camera-toggle');
+    await expect(camera).toHaveAccessibleName('Turn the camera off');
+    await expect(camera).not.toHaveAttribute('aria-pressed');
+
+    await camera.click();
     expect((await trackState(page)).video).toBe(false);
-    await expect(page.locator('#camera-toggle')).toHaveAttribute('aria-pressed', 'true');
+    await expect(camera).toHaveAccessibleName('Turn the camera on');
   });
 
-  // Pressing either with no device would throw inside the reducer.
+  // Pressing either with no device would throw inside the reducer. The capture is held
+  // pending, so the page stays in the moment before any track exists.
   test('neither can be pressed before there is a track to switch', async ({ page }) => {
-    await page.goto('/#/play');
-    await expect(page.locator('#mute-toggle')).toHaveCount(0);
+    await page.addInitScript(() => {
+      navigator.mediaDevices.getUserMedia = () => new Promise(() => {});
+    });
+    await page.goto('/#/publish');
+    await openTab(page, 'Source');
+
+    await expect(page.locator('#camera-toggle')).toBeDisabled();
+    await expect(page.locator('#mute-toggle')).toBeDisabled();
   });
 });
 

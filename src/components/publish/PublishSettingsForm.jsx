@@ -433,12 +433,13 @@ const PublishSettingsForm = ({ tab = 'connection' }) => {
             <PublishVideoDropdown />
           </div>
           <div className="col-2">
+            {/* The label names the action and flips with it, so there is no aria-pressed as
+                well: the two together read as "Turn the camera on, pressed". */}
             <button
               id="camera-toggle"
               type="button"
               className="control-button"
               title={isCameraOn ? 'Turn the camera off' : 'Turn the camera on'}
-              aria-pressed={!isCameraOn}
               aria-label={isCameraOn ? 'Turn the camera off' : 'Turn the camera on'}
               disabled={!publishSettings.videoTrack}
               onClick={toggleCamera}
@@ -462,7 +463,6 @@ const PublishSettingsForm = ({ tab = 'connection' }) => {
               type="button"
               className="control-button"
               title={isMicOn ? 'Mute the microphone' : 'Unmute the microphone'}
-              aria-pressed={!isMicOn}
               aria-label={isMicOn ? 'Mute the microphone' : 'Unmute the microphone'}
               disabled={!publishSettings.audioTrack}
               onClick={toggleMicrophone}>
