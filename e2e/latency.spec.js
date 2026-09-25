@@ -398,7 +398,9 @@ const expectStampsFromPublisher = (publisherData, playerData, label) => {
   expect(altered.slice(0, 5), `${label}: stamps whose send time changed on the way`).toEqual([]);
 
   const transport = stamped.map((f) => f.arrivedAt - f.sentAt);
-  expect(Math.min(...transport), `${label}: a frame arrived before it was sent`).toBeGreaterThan(0);
+  // Both ends read Date.now, which ticks in whole milliseconds, so a small rung through a
+  // local Engine can read 0. Only a negative figure means arriving before being sent.
+  expect(Math.min(...transport), `${label}: a frame arrived before it was sent`).toBeGreaterThanOrEqual(0);
   expect(Math.max(...transport), `${label}: an implausible transport time`).toBeLessThan(1000);
   return { stamped: stamped.length, rungs: [...new Set(stamped.map((f) => f.rung))] };
 };
