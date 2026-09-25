@@ -144,10 +144,6 @@ ul.navbar-nav {
   }
 }
 
-/* display:block above would otherwise beat the UA rule for the hidden attribute. */
-#player-video[hidden],
-#publisher-video[hidden] { display: none; }
-
 /* Shown while there is no picture, so the stage does not collapse to an empty strip. */
 .wz-video-placeholder {
   flex: 1 1 auto;
