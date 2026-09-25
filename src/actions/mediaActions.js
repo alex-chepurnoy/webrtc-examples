@@ -1,4 +1,4 @@
-import { videoConstraintsByFrameSize } from "../constants/PublishOptions";
+import { frameRateConstraint, videoConstraintsByFrameSize } from "../constants/PublishOptions";
 
 export const SET_MEDIA_CANVAS="SET_MEDIA_CANVAS";
 export const SET_MEDIA_CONSTRAINTS="SET_MEDIA_CONSTRAINTS";
@@ -18,9 +18,13 @@ export const setCameraFrameSizeAndRate = (constraints, videoFrameSize, videoFram
   {
     newConstraints.video = {};
   }
-  newConstraints.video.width = videoConstraintsByFrameSize[videoFrameSize].width;
-  newConstraints.video.height = videoConstraintsByFrameSize[videoFrameSize].height;
-  newConstraints.video.frameRate = videoFrameRate;
+  const size = videoConstraintsByFrameSize[videoFrameSize] || videoConstraintsByFrameSize.default;
+  // Set or clear each key, so a key the new size does not constrain cannot linger from the last one.
+  const next = { width: size.width, height: size.height, frameRate: frameRateConstraint(videoFrameRate) };
+  for (const [key, value] of Object.entries(next)) {
+    if (value) newConstraints.video[key] = value;
+    else delete newConstraints.video[key];
+  }
 
   return {
     type:SET_MEDIA_CONSTRAINTS,

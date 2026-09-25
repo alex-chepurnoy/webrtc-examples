@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { videoConstraintsByFrameSize, videoFrameSizes } from './PublishOptions';
+import { frameRateConstraint, videoConstraintsByFrameSize, videoFrameSizes } from './PublishOptions';
 import * as MediaActions from '../actions/mediaActions';
 import mediaReducer from '../reducers/mediaReducer';
 
@@ -43,5 +43,37 @@ describe('default frame size', () => {
     expect(back.video.width).toEqual({ ideal: 1280 });
     expect(back.video.height).toEqual({ ideal: 720 });
     expect(back.video.deviceId).toBe('cam');
+  });
+});
+
+describe('frame rate', () => {
+  it('turns the setting text into a numeric ideal', () => {
+    expect(frameRateConstraint('30')).toEqual({ ideal: 30 });
+    expect(frameRateConstraint('29.97')).toEqual({ ideal: 29.97 });
+    expect(frameRateConstraint(15)).toEqual({ ideal: 15 });
+  });
+
+  it('sends nothing, never NaN, for an empty, auto or non-positive value', () => {
+    for (const value of ['', '  ', 'auto', 'abc', '0', '-5', null, undefined]) {
+      expect(frameRateConstraint(value)).toBeUndefined();
+    }
+  });
+
+  it('is not carried per explicit size, where the setting always replaced it', () => {
+    for (const { value } of videoFrameSizes.filter((s) => s.value !== 'default')) {
+      expect(videoConstraintsByFrameSize[value]).not.toHaveProperty('frameRate');
+    }
+  });
+
+  it('is applied by the camera action as a number, not the setting string', () => {
+    const { constraints } = MediaActions.setCameraFrameSizeAndRate({ video: true }, '1280x720', '24');
+    expect(constraints.video.frameRate).toEqual({ ideal: 24 });
+  });
+
+  it('is cleared by the camera action when the setting is empty', () => {
+    const { constraints } = MediaActions.setCameraFrameSizeAndRate(
+      { video: { frameRate: { ideal: 30 } } }, 'default', '');
+    expect(constraints.video).not.toHaveProperty('frameRate');
+    expect(Number.isNaN(constraints.video.frameRate)).toBe(false);
   });
 });

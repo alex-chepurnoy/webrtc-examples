@@ -161,11 +161,8 @@ const PublishSettingsForm = ({ tab = 'connection' }) => {
     if (constraints.width) newConstraints.width = constraints.width;
     if (constraints.height) newConstraints.height = constraints.height;
 
-    const requestedRate = Number(publishSettings.videoFrameRate);
-    if (Number.isFinite(requestedRate) && requestedRate > 0) {
-      // ideal, not exact: a camera that cannot hit the rate gives its closest instead of failing.
-      newConstraints.frameRate = { ideal: requestedRate };
-    }
+    const frameRate = PublishOptions.frameRateConstraint(publishSettings.videoFrameRate);
+    if (frameRate) newConstraints.frameRate = frameRate;
 
     console.log("Applying preview constraints:", newConstraints);
 
