@@ -464,6 +464,25 @@ test.describe('signaling URL', () => {
   });
 });
 
+test.describe('share link', () => {
+  test('the publisher copies a link that reopens this page with these settings', async ({ page, context }) => {
+    await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+    page.on('dialog', (dialog) => dialog.accept());
+    await page.goto('/#/publish');
+    await page.fill('#applicationName', 'webrtc');
+    await page.fill('#streamName', 'shared');
+
+    const share = page.getByRole('button', { name: 'Copy Link' });
+    // The image used to reuse the microphone icon's id.
+    await expect(share.locator('img')).not.toHaveAttribute('id');
+
+    await share.click();
+    const clipboard = () => page.evaluate(() => navigator.clipboard.readText());
+    await expect.poll(clipboard).toContain('publishStreamName=shared');
+    expect(await clipboard()).toMatch(/#\/publish$/);
+  });
+});
+
 // The banner is about one attempt on one page, so it must not outlive either.
 test.describe('error banner', () => {
   const refusePlay = async (page) => {

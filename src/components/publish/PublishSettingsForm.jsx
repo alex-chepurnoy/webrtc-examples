@@ -292,6 +292,23 @@ const PublishSettingsForm = ({ tab = 'connection' }) => {
   // Test aid: trigger an ICE restart on the active publish peer connection. See IceRestartUtils.
   const handleRestartIce = () => triggerIceRestart(webrtcPublish.peerConnection);
 
+  // The same keys the cookie uses, which the mount effect above reads back from the query.
+  // The hash is kept so the link opens this page rather than the default route.
+  const handleShareLink = () => {
+    const params = new URLSearchParams();
+    Object.entries(publishUrlParametersMap).forEach(([stateKey, queryKey]) => {
+      const value = publishSettings[stateKey];
+      if (value == null || value === '') return;
+      params.set(queryKey, typeof value === 'object' ? JSON.stringify(value) : value);
+    });
+
+    const shareUrl = `${window.location.origin}${window.location.pathname}?${params.toString()}${window.location.hash}`;
+
+    navigator.clipboard.writeText(shareUrl)
+      .then(() => alert('Share link copied to clipboard!'))
+      .catch((err) => console.error('Failed to copy link:', err));
+  };
+
   // null means the question could not be answered here, which is not a reason to warn.
   // Memoized: getCapabilities is not free and this form re-renders on every keystroke.
   const codecUnavailable = useMemo(
@@ -657,8 +674,14 @@ const PublishSettingsForm = ({ tab = 'connection' }) => {
             }
           </div>
           <div className="col-2">
-            <button id="publish-share-link" type="button" className="control-button mt-0">
-              <img alt="" className="noll" id="mute-off" src={fileCopyImage} />
+            <button
+              id="publish-share-link"
+              type="button"
+              className="control-button mt-0"
+              onClick={handleShareLink}
+              title="Copy share link"
+            >
+              <img alt="Copy Link" className="noll" src={fileCopyImage} />
             </button>
           </div>
         </div>
