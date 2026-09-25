@@ -233,10 +233,27 @@ export const instrumentTrack = (track, role, direction) => {
     documentVisibility: typeof document === 'undefined' ? null : document.visibilityState,
   });
 
+  /*
+   * A track the page stops itself (a camera switch, which on mobile has to close the old
+   * camera first) is not a failure, and some browsers still fire ended for it. stop() is
+   * wrapped so that case reads as what it is.
+   */
+  let stoppedByPage = false;
+  const hadOwnStop = Object.prototype.hasOwnProperty.call(track, 'stop');
+  const originalStop = track.stop;
+  if (typeof originalStop === 'function') {
+    track.stop = (...args) => {
+      stoppedByPage = true;
+      return originalStop.apply(track, args);
+    };
+  }
+
   const listeners = {
     mute: () => logEvent('error', 'pc', `${role} ${direction} ${track.kind} track muted by the browser`, describe()),
     unmute: () => logEvent('info', 'pc', `${role} ${direction} ${track.kind} track resumed`, describe()),
-    ended: () => logEvent('error', 'pc', `${role} ${direction} ${track.kind} track ended`, describe()),
+    ended: () => (stoppedByPage
+      ? logEvent('info', 'pc', `${role} ${direction} ${track.kind} track stopped by the page`, describe())
+      : logEvent('error', 'pc', `${role} ${direction} ${track.kind} track ended`, describe())),
   };
   for (const [type, fn] of Object.entries(listeners)) track.addEventListener(type, fn);
 
@@ -245,6 +262,10 @@ export const instrumentTrack = (track, role, direction) => {
   return {
     stop: () => {
       for (const [type, fn] of Object.entries(listeners)) track.removeEventListener(type, fn);
+      if (typeof originalStop === 'function') {
+        if (hadOwnStop) track.stop = originalStop;
+        else delete track.stop;
+      }
       delete track.__wzInstrumented;
     },
   };
