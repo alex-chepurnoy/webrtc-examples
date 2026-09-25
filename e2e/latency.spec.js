@@ -617,6 +617,14 @@ test.describe('the open question: does the marker survive the simulcast rungs', 
       // Long enough for the encoder to have settled on which rungs it is going to fill.
       await publisher.waitForTimeout(15_000);
       result.outbound = await outboundRungs(publisher);
+      // What the camera captures, which the top rung carries unscaled.
+      result.sourceWidth = await publisher.evaluate(() => {
+        for (const pc of window.__wz.pcs) {
+          const sender = pc.getSenders().find((s) => s.track?.kind === 'video');
+          if (sender) return sender.track.getSettings().width ?? null;
+        }
+        return null;
+      });
       console.log(`\npublisher outbound rungs, stamp=${stamp}:\n${JSON.stringify(result.outbound, null, 2)}`);
 
       // "h" is the source stream itself, so only the rescaled rungs have a <name>_<rid>.
@@ -692,6 +700,8 @@ test.describe('the open question: does the marker survive the simulcast rungs', 
     expect(measuredRungs.length,
       `no rescaled rung carried frames to measure. Skipped: ${JSON.stringify(measured.skipped)}`)
       .toBeGreaterThan(0);
+    expect(measured.sourceWidth, 'the published video track reported no capture width')
+      .toBeGreaterThan(0);
 
     for (const rung of measuredRungs) {
       const outcome = measured.rungs[rung];
@@ -703,9 +713,11 @@ test.describe('the open question: does the marker survive the simulcast rungs', 
       // The join is on rung as well as sequence, so this is also the rung byte surviving.
       const joined = expectStampsFromPublisher(measured.publisherRaw, outcome.raw, `rung _${rung}`);
       console.log(`rung _${rung}: stamp rung values seen ${JSON.stringify(joined.rungs)}`);
+      // Against the capture, not a fixed width: the Default capture size is the camera's call.
       expect(outcome.inbound.frameWidth,
-        `rung _${rung} was not rescaled, so it does not test what killed the pixel stamp`)
-        .toBeLessThan(640);
+        `rung _${rung} was not rescaled from the ${measured.sourceWidth} px capture, so it `
+        + 'does not test what killed the pixel stamp')
+        .toBeLessThan(measured.sourceWidth);
     }
   });
 });
