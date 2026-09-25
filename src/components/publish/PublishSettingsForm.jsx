@@ -7,7 +7,7 @@ import PublishAudioDropdown from './PublishAudioDropdown';
 import PublishVideoDropdown from './PublishVideoDropdown';
 import Cookies from 'js-cookie';
 import { readQueryParams } from '../../utils/QueryParams';
-import { VIDEO_CODEC_OPTIONS, isVideoCodecOfferable } from '../../utils/CodecUtils';
+import { VIDEO_CODEC_OPTIONS, canRestrictVideoCodecOffer, isVideoCodecOfferable } from '../../utils/CodecUtils';
 import { cameraTrackOf } from '../../utils/VideoTrackUtils';
 import { getCookieValues } from '../../utils/CookieUtils';
 import RecentInput from '../shared/RecentInput';
@@ -283,6 +283,9 @@ const PublishSettingsForm = ({ tab = 'connection' }) => {
     () => isVideoCodecOfferable(publishSettings.videoCodec) === false,
     [publishSettings.videoCodec]
   );
+  // Without setCodecPreferences the offer cannot be narrowed, so any choice but Auto is ignored.
+  const codecUnrestrictable = publishSettings.videoCodec !== 'auto'
+    && canRestrictVideoCodecOffer() === false;
 
   if (!initialized) return null;
 
@@ -487,6 +490,12 @@ const PublishSettingsForm = ({ tab = 'connection' }) => {
                   choice is ignored and the browser's full codec list is offered instead, as
                   with Auto. H.265 needs Chrome on Windows, macOS or Android with a hardware
                   HEVC encoder; Edge does not send it at all.
+                </small>
+              ) : codecUnrestrictable ? (
+                <small className="wz-field-error" id="videoCodec-unrestricted" role="alert">
+                  This browser cannot restrict the offer to one codec (it has no
+                  RTCRtpTransceiver.setCodecPreferences), so the choice is ignored and the
+                  browser's full codec list is offered instead, as with Auto.
                 </small>
               ) : (
                 <small className="form-text text-muted">

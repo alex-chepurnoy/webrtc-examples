@@ -78,7 +78,12 @@ const reportRejectedVideo = (answerSdp, publishSettings, callbacks, session) => 
   if (publishSettings.videoTrack == null) return;
 
   const offerable = isVideoCodecOfferable(publishSettings.videoCodec);
-  const message = describeRejectedVideo(answerSdp, publishSettings.videoCodec, offerable);
+  // Only a single-codec offer that was refused is the Engine refusing that codec. When the
+  // preference could not be applied the full list went out, and the message has to say so.
+  const asked = publishSettings.videoCodec && publishSettings.videoCodec !== 'auto';
+  const preferenceApplied = asked ? Boolean(session.videoCodecApplied) : null;
+  const message = describeRejectedVideo(
+    answerSdp, publishSettings.videoCodec, offerable, preferenceApplied);
   if (!message) return;
 
   // Report once per session, and only latch when there is something to report. Every ICE
@@ -89,6 +94,7 @@ const reportRejectedVideo = (answerSdp, publishSettings, callbacks, session) => 
   logEvent('error', 'pc', 'server rejected the video m-line', {
     videoCodec: publishSettings.videoCodec,
     browserCanOfferCodec: offerable,
+    codecPreferenceApplied: preferenceApplied,
   });
   // Deliberately not onError: that tears the publish down, and audio is still flowing.
   // This is a degraded publish, not a failed one. The callback gets its own try here so
@@ -110,7 +116,7 @@ const armEncodedStreams = (session, publishSettings) => {
     logEvent('error', 'pc', 'latency probe unavailable', probeUnavailableReason());
 };
 
-const addVideoSender = (peerConnection, videoTrack, publishSettings) => {
+const addVideoSender = (peerConnection, videoTrack, publishSettings, session) => {
   // A publish with no video still reaches "connected" and shows LIVE, so say so here.
   // Error only when a camera was chosen and no track came out; "None" is a choice.
   const cameraChosen = Boolean(publishSettings.videoTrack1DeviceId);
@@ -136,6 +142,8 @@ const addVideoSender = (peerConnection, videoTrack, publishSettings) => {
   // honoring its order, so reordering alone does not make the choice stick.
   // The outcome is logged so a surprising negotiated codec can be traced.
   const applied = applyVideoCodecPreference(peerConnection, sender, publishSettings.videoCodec);
+  // Kept for reportRejectedVideo, which must not blame the Engine for a codec never offered alone.
+  session.videoCodecApplied = applied;
 
   // "auto" is no preference, so leaving the order to the browser is not an error.
   const noPreferenceAsked = !publishSettings.videoCodec || publishSettings.videoCodec === 'auto';
@@ -347,7 +355,7 @@ const websocketOnOpen = (publishSettings, websocket, callbacks, session) => {
       keepUntilStopped(peerConnection, instrumentTrack(publishSettings.audioTrack, 'publish', 'outbound'));
       audioSender = peerConnection.addTrack(publishSettings.audioTrack);
     }
-    videoSender = addVideoSender(peerConnection, publishSettings.videoTrack, publishSettings);
+    videoSender = addVideoSender(peerConnection, publishSettings.videoTrack, publishSettings, session);
 
 
     // encodedInsertableStreams covers the whole connection, so audio frames must be passed on.
@@ -465,6 +473,8 @@ const startPublish = (publishSettings, websocket, callbacks) =>
         negotiationEstablished: false,
         // A rejected video m-line is reported once, not on every ICE-restart answer.
         videoRejectionReported: false,
+        // The codec the offer was narrowed to, or null when the full list went out.
+        videoCodecApplied: null,
         // handle to the enabled data channels, cleared once the server refuses them.
         dataChannels: null,
         // pending timer waiting for the answer to the initial offer, see NegotiationFailureUtils.
@@ -584,7 +594,7 @@ const startPublishWhip = async (publishSettings, session, callbacks) => {
     if (publishSettings.latencyProbe && audioSender)
       passThroughEncodedFrames(audioSender, 'publish audio sender');
 
-    videoSender = addVideoSender(peerConnection, publishSettings.videoTrack, publishSettings);
+    videoSender = addVideoSender(peerConnection, publishSettings.videoTrack, publishSettings, session);
 
     if (callbacks.onSetSenders)
       callbacks.onSetSenders({ audioSender, videoSender });

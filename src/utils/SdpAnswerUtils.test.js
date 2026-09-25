@@ -76,6 +76,33 @@ describe('describeRejectedVideo', () => {
     expect(m).toMatch(/the Engine application does not accept H265/i);
   });
 
+  /*
+   * setCodecPreferences missing or throwing: the browser can encode the codec but the offer
+   * still carried the full list, so the Engine refused everything, not the chosen codec.
+   */
+  it('does not blame the Engine for a codec it was never offered alone', () => {
+    const m = describeRejectedVideo(REJECTED, 'H264', true, false);
+    expect(m).toMatch(/could not restrict the offer to H264/);
+    expect(m).toMatch(/full codec list was offered/i);
+    expect(m).not.toMatch(/does not accept H264/);
+    expect(m).not.toContain('set Video Codec to Auto');
+    expect(m).toContain('PreferredCodecsVideo');
+  });
+
+  it('blames the Engine only when the single-codec offer was sent', () => {
+    expect(describeRejectedVideo(REJECTED, 'H264', true, true))
+      .toMatch(/the Engine application does not accept H264/);
+  });
+
+  it('keeps the cannot-encode message ahead of the cannot-restrict one', () => {
+    expect(describeRejectedVideo(REJECTED, 'H265', false, false))
+      .toMatch(/this browser cannot encode H265/);
+  });
+
+  it('ignores the applied flag for Auto', () => {
+    expect(describeRejectedVideo(REJECTED, 'auto', null, false)).toMatch(/no video codec in common/i);
+  });
+
   it('stays neutral when browser support could not be determined', () => {
     const m = describeRejectedVideo(REJECTED, 'H265', null);
     expect(m).toMatch(/the Engine application does not accept H265/i);
