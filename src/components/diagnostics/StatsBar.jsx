@@ -27,7 +27,9 @@ const Tile = ({ label, value, sub, tone = 'unknown', title, history, format, spa
     <div className="wz-stat__label">{label}</div>
     <div className="wz-stat__row">
       <span className="wz-stat__value">{value}</span>
-      {history ? <Sparkline points={history} format={format} ariaLabel={sparkLabel || label} /> : null}
+      {history ? (
+        <Sparkline points={history.values} times={history.times} format={format} ariaLabel={sparkLabel || label} />
+      ) : null}
     </div>
     {sub ? <div className="wz-stat__sub">{sub}</div> : null}
   </div>
@@ -44,9 +46,10 @@ const Group = ({ title, children }) => (
   </section>
 );
 
+// Values keep their nulls and their sample times, so a gap is drawn as a gap.
 const seriesOf = (history, key) =>
   Array.isArray(history) && history.length > 1
-    ? history.map((h) => (h ? h[key] : null))
+    ? { values: history.map((h) => (h ? h[key] : null)), times: history.map((h) => (h ? h.at : null)) }
     : null;
 
 // role comes from the page, not the stats: a player not yet connected is not receiving.
