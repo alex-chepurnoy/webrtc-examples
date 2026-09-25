@@ -464,6 +464,48 @@ test.describe('signaling URL', () => {
   });
 });
 
+test.describe('camera preview', () => {
+  // WebKit may not paint a video that started playing under display:none.
+  test('the preview is laid out but invisible until there is a picture', async ({ page }) => {
+    await page.addInitScript(() => {
+      navigator.mediaDevices.getUserMedia = () => new Promise(() => {});
+    });
+    await page.goto('/#/publish');
+    await expect(page.locator('#publish-video-container .wz-video-placeholder')).toBeVisible();
+
+    const style = await page.evaluate(() => {
+      const cs = getComputedStyle(document.getElementById('publisher-video'));
+      return { display: cs.display, visibility: cs.visibility };
+    });
+    expect(style).toEqual({ display: 'block', visibility: 'hidden' });
+  });
+
+  test('switching camera does not flash the placeholder', async ({ page }) => {
+    await page.goto('/#/publish');
+    await waitForCamera(page);
+
+    await page.evaluate(() => {
+      window.__placeholderSeen = 0;
+      new MutationObserver(() => {
+        if (document.querySelector('#publish-video-container .wz-video-placeholder')) window.__placeholderSeen += 1;
+      }).observe(document.getElementById('publish-video-container'), { childList: true, subtree: true });
+    });
+
+    // The same round trip waitForCamera makes: release the camera, then open it again.
+    await openTab(page, 'Source');
+    const cameraId = await page.locator('#camera-list-select').inputValue();
+    await page.selectOption('#camera-list-select', '');
+    await page.waitForTimeout(250);
+    await page.selectOption('#camera-list-select', cameraId);
+    await page.waitForFunction(() => {
+      const v = document.getElementById('publisher-video');
+      return v.srcObject && v.srcObject.getVideoTracks().some((t) => t.readyState === 'live') && v.videoWidth > 0;
+    });
+
+    expect(await page.evaluate(() => window.__placeholderSeen)).toBe(0);
+  });
+});
+
 test.describe('share link', () => {
   test('the publisher copies a link that reopens this page with these settings', async ({ page, context }) => {
     await context.grantPermissions(['clipboard-read', 'clipboard-write']);
