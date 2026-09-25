@@ -1,3 +1,5 @@
+import { transportOf } from './SignalingUrlUtils';
+
 /*
  * Recently used signaling URLs, application names and stream names: per field, most recent
  * first, offered as suggestions. Signaling URLs are also kept per transport.
