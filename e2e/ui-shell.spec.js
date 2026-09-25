@@ -778,6 +778,49 @@ test.describe('field layout', () => {
 });
 
 // The selected tab is bold, and bold is wider. Held to the pixel: the labels must not move.
+test.describe('tab keyboard', () => {
+  // The WAI-ARIA tabs pattern: one Tab stop, arrows and Home/End move the selection.
+  test('the arrow keys, Home and End move along the tabs, with one Tab stop', async ({ page }) => {
+    await page.goto('/#/publish');
+    const tabs = page.getByRole('tab');
+    const selected = page.locator('.wz-tabs [role="tab"][aria-selected="true"]');
+
+    // Roving tabindex: only the selected tab is in the Tab order.
+    await expect(tabs).toHaveCount(3);
+    expect(await tabs.evaluateAll((els) => els.map((el) => el.tabIndex))).toEqual([0, -1, -1]);
+
+    await tabs.first().focus();
+    await page.keyboard.press('ArrowRight');
+    await expect(selected).toHaveText('Source');
+    await expect(page.getByRole('tab', { name: 'Source' })).toBeFocused();
+    expect(await tabs.evaluateAll((els) => els.map((el) => el.tabIndex))).toEqual([-1, 0, -1]);
+
+    await page.keyboard.press('End');
+    await expect(selected).toHaveText('Advanced');
+    await page.keyboard.press('ArrowRight');
+    await expect(selected).toHaveText('Connection');
+    await page.keyboard.press('ArrowLeft');
+    await expect(selected).toHaveText('Advanced');
+    await page.keyboard.press('Home');
+    await expect(selected).toHaveText('Connection');
+    await expect(page.getByRole('tab', { name: 'Connection' })).toBeFocused();
+  });
+
+  test('a tab only points at a panel that is in the page', async ({ page }) => {
+    await page.goto('/#/publish');
+    await openTab(page, 'Source');
+    const dangling = await page.evaluate(() => [...document.querySelectorAll('[role="tab"]')]
+      .filter((tab) => {
+        const id = tab.getAttribute('aria-controls');
+        return id !== null && !document.getElementById(id);
+      })
+      .map((tab) => tab.id));
+    expect(dangling).toEqual([]);
+    await expect(page.getByRole('tab', { name: 'Source' })).toHaveAttribute('aria-controls', 'panel-source');
+    await expect(page.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', 'tab-source');
+  });
+});
+
 test.describe('tab stability', () => {
   test('the tab labels do not move when the selection changes', async ({ page }) => {
     await page.goto('/#/publish');

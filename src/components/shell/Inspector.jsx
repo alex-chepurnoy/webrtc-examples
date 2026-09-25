@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 
 import ExternalLinks from '../../constants/ExternalLinks';
 import Resizer from './Resizer';
@@ -18,6 +18,27 @@ const Inspector = ({ tabs, actions, legacyHref = null, sides = null, side = null
   }, [tabs, active]);
 
   const current = tabs.find((t) => t.id === active) || tabs[0];
+
+  /*
+   * The WAI-ARIA tabs pattern: the strip is one Tab stop (the selected tab), and the arrow
+   * keys, Home and End move the selection along it. Selection follows focus, because every
+   * panel is a form that renders at once.
+   */
+  const tabRefs = useRef({});
+  const onTabKeyDown = (event) => {
+    const index = tabs.findIndex((t) => t.id === current.id);
+    let next = null;
+    if (event.key === 'ArrowRight') next = (index + 1) % tabs.length;
+    else if (event.key === 'ArrowLeft') next = (index - 1 + tabs.length) % tabs.length;
+    else if (event.key === 'Home') next = 0;
+    else if (event.key === 'End') next = tabs.length - 1;
+    if (next === null) return;
+
+    event.preventDefault();
+    const id = tabs[next].id;
+    setActive(id);
+    tabRefs.current[id]?.focus();
+  };
 
   const maxWidth = useCallback(() => Math.max(300, window.innerWidth - 520), []);
   const { size, handleProps, targetRef } = useResizable({
@@ -51,15 +72,18 @@ const Inspector = ({ tabs, actions, legacyHref = null, sides = null, side = null
         </div>
       ) : null}
 
-      <div className="wz-tabs" role="tablist">
+      <div className="wz-tabs" role="tablist" aria-label="Settings sections" onKeyDown={onTabKeyDown}>
         {tabs.map((t) => (
           <button
             key={t.id}
+            ref={(el) => { tabRefs.current[t.id] = el; }}
             type="button"
             role="tab"
             id={'tab-' + t.id}
-            aria-selected={active === t.id}
-            aria-controls={'panel-' + t.id}
+            aria-selected={current.id === t.id}
+            /* Only the selected tab's panel is rendered, so only it has a panel to point at. */
+            aria-controls={current.id === t.id ? 'panel-' + t.id : undefined}
+            tabIndex={current.id === t.id ? 0 : -1}
             onClick={() => setActive(t.id)}
             /* The label again, for the width reservation in shell.css. */
             data-label={t.label}
