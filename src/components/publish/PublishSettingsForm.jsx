@@ -49,6 +49,10 @@ const publishUrlParametersMap = {
   captionsEnabled: "publishCaptionsEnabled",
 };
 
+// Credentials stay out of the share link: a URL lands in chat logs, browser history and server
+// logs. The other machine enters its own.
+const SHARE_LINK_EXCLUDED = new Set(['turnPassword', 'authToken']);
+
 // `tab` picks which field group shows; the inspector owns the tab strip. One instance
 // stays mounted across tabs, so the effects here run once.
 const PublishSettingsForm = ({ tab = 'connection' }) => {
@@ -295,6 +299,7 @@ const PublishSettingsForm = ({ tab = 'connection' }) => {
   const handleShareLink = () => {
     const params = new URLSearchParams();
     Object.entries(publishUrlParametersMap).forEach(([stateKey, queryKey]) => {
+      if (SHARE_LINK_EXCLUDED.has(stateKey)) return;
       const value = publishSettings[stateKey];
       if (value == null || value === '') return;
       params.set(queryKey, typeof value === 'object' ? JSON.stringify(value) : value);

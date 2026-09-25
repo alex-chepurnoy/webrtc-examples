@@ -635,6 +635,31 @@ test.describe('share link', () => {
     await expect.poll(clipboard).toContain('publishStreamName=shared');
     expect(await clipboard()).toMatch(/#\/publish$/);
   });
+
+  // Settings arrive through the query, the same way a shared link delivers them.
+  const credentialsStayOut = [
+    { route: 'publish', button: '#publish-share-link', keep: 'publishStreamName=shared',
+      secrets: ['publishTurnPassword=pw-123', 'publishAuthToken=tok-123'] },
+    { route: 'play', button: '#play-share-link', keep: 'playStreamName=shared',
+      secrets: ['playTurnPassword=pw-123', 'playAuthToken=tok-123', 'playSecret=sec-123'] },
+  ];
+
+  for (const { route, button, keep, secrets } of credentialsStayOut) {
+    test(`the ${route} link leaves credentials out and opens the ${route} page`, async ({ page, context }) => {
+      await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+      page.on('dialog', (dialog) => dialog.accept());
+      await page.goto(`/?${[keep, ...secrets].join('&')}#/${route}`);
+
+      await page.locator(button).click();
+      const clipboard = () => page.evaluate(() => navigator.clipboard.readText());
+      await expect.poll(clipboard).toContain(keep);
+      const link = await clipboard();
+      for (const secret of secrets) {
+        expect(link).not.toContain(secret.split('=')[0]);
+      }
+      expect(link).toMatch(new RegExp(`#/${route}$`));
+    });
+  }
 });
 
 // The banner is about one attempt on one page, so it must not outlive either.

@@ -40,6 +40,10 @@ const playUrlParametersMap = {
   latencyProbe: "playLatencyProbe"
 };
 
+// Credentials stay out of the share link: a URL lands in chat logs, browser history and server
+// logs. The other machine enters its own.
+const SHARE_LINK_EXCLUDED = new Set(['turnPassword', 'secret', 'authToken']);
+
 const SIGNALING_URL_PLACEHOLDER = "wss://[ssl-certificate-domain-name]/webrtc-session.json";
 const HTTP_URL_PLACEHOLDER = "https://[ssl-certificate-domain-name]:[port]";
 
@@ -143,13 +147,15 @@ const PlaySettingsForm = ({ tab = 'connection' }) => {
     const params = new URLSearchParams();
 
     Object.entries(playUrlParametersMap).forEach(([stateKey, cookieKey]) => {
+      if (SHARE_LINK_EXCLUDED.has(stateKey)) return;
       const value = playSettings[stateKey];
       if (value != null && value !== '') {
         params.set(cookieKey, value);
       }
     });
 
-    const shareUrl = `${window.location.origin}${window.location.pathname}?${params.toString()}`;
+    // The hash is kept so the link opens this page rather than the default route.
+    const shareUrl = `${window.location.origin}${window.location.pathname}?${params.toString()}${window.location.hash}`;
 
     navigator.clipboard.writeText(shareUrl)
       .then(() => alert('Share link copied to clipboard!'))
