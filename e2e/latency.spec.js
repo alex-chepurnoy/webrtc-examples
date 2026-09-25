@@ -40,8 +40,8 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const frameStampSource = () => {
   const file = path.join(here, '..', 'src', 'utils', 'frameStamp.js');
   const source = fs.readFileSync(file, 'utf8');
-  if (!source.includes('export const buildSeiPayload')) {
-    throw new Error(`frameStamp.js at ${file} no longer exports buildSeiPayload`);
+  if (!source.includes('export const insertStamp')) {
+    throw new Error(`frameStamp.js at ${file} no longer exports insertStamp`);
   }
   return source.replace(/^export /gm, '');
 };
@@ -98,6 +98,12 @@ window.__wz = {
      * RTCEncodedVideoFrame.getMetadata().
      */
     const counters = new Map();
+    // The one-byte rung index the stamp carries, in order of first appearance, as the app does.
+    const rungIndices = new Map();
+    const rungIndexOf = (rung) => {
+      if (!rungIndices.has(rung)) rungIndices.set(rung, Math.min(rungIndices.size, 255));
+      return rungIndices.get(rung);
+    };
     let seen = 0;
 
     const transformer = new TransformStream({
@@ -125,18 +131,21 @@ window.__wz = {
           if (W.stamp) {
             const seq = advance();
             const sentAt = Date.now();
-            const sei = buildSeiPayload({ sequence: seq, sentAt });
-            const body = new Uint8Array(frame.data);
-            const out = new Uint8Array(sei.length + body.length);
-            out.set(sei, 0);
-            out.set(body, sei.length);
-            frame.data = out.buffer;
-            W.sent.push({
-              rung, seq, sentAt,
-              rtp: meta.rtpTimestamp != null ? meta.rtpTimestamp : null,
-              keyFrame: frame.type === 'key',
-              bytes: out.length,
-            });
+            const rungIndex = rungIndexOf(rung);
+            // The app's own placement: after any AUD, SPS and PPS, in front of the first slice.
+            const out = insertStamp(new Uint8Array(frame.data), { sequence: seq, sentAt, rung: rungIndex });
+            if (out === null) {
+              note('sender: a frame did not parse as H.264 and went out unstamped');
+              W.sent.push({ rung, seq, bare: true });
+            } else {
+              frame.data = out.buffer;
+              W.sent.push({
+                rung, rungIndex, seq, sentAt,
+                rtp: meta.rtpTimestamp != null ? meta.rtpTimestamp : null,
+                keyFrame: frame.type === 'key',
+                bytes: out.length,
+              });
+            }
           } else {
             W.sent.push({ rung, seq: advance(), bare: true });
           }
@@ -182,6 +191,7 @@ window.__wz = {
             keyFrame: frame.type === 'key',
             seq: found ? found.sequence : null,
             sentAt: found ? found.sentAt : null,
+            rung: found ? found.rung : null,
             displayHi: null,
           };
           W.frames.push(record);
@@ -271,9 +281,12 @@ const readInstrument = (page) =>
       sentTotal: W.sent.length,
       sentByRung: byRung,
       sentDropped: W.sent.filter((s) => s.dropped).length,
+      // What the publisher actually wrote, so a player's reading can be checked against it.
+      sentStamps: W.sent.filter((s) => typeof s.sentAt === 'number')
+        .map((s) => ({ rungIndex: s.rungIndex, seq: s.seq, sentAt: s.sentAt })),
       frames: W.frames.map((f) => ({
         arrivedAt: f.arrivedAt, arrivedHi: f.arrivedHi, rtp: f.rtp, bytes: f.bytes,
-        keyFrame: f.keyFrame, seq: f.seq, sentAt: f.sentAt, displayHi: f.displayHi,
+        keyFrame: f.keyFrame, seq: f.seq, sentAt: f.sentAt, rung: f.rung, displayHi: f.displayHi,
       })),
       presented: W.presented.length,
       presentedJoined: W.presented.filter((p) => p.joined).length,
@@ -364,6 +377,30 @@ const summarize = (label, data) => {
   };
   console.log(`\n--- ${label} ---\n${JSON.stringify(summary, null, 2)}`);
   return summary;
+};
+
+/*
+ * A marker rate of 1 says every frame carried something; this says it carried what the publisher
+ * wrote. Every stamp the player read is joined to the publisher's record by rung and sequence,
+ * and the send time has to match to the millisecond, so a stamp the Engine mangled, re-used or
+ * re-numbered fails here. Both ends read one machine's Date.now, so transport also has to be a
+ * plausible positive figure.
+ */
+const expectStampsFromPublisher = (publisherData, playerData, label) => {
+  const written = new Map(publisherData.sentStamps.map((s) => [`${s.rungIndex}:${s.seq}`, s.sentAt]));
+  const stamped = playerData.frames.filter((f) => f.seq !== null);
+  expect(stamped.length, `${label}: the player read no stamps`).toBeGreaterThan(30);
+
+  const unknown = stamped.filter((f) => !written.has(`${f.rung}:${f.seq}`));
+  expect(unknown.slice(0, 5), `${label}: stamps the publisher never wrote (rung:seq)`).toEqual([]);
+
+  const altered = stamped.filter((f) => written.get(`${f.rung}:${f.seq}`) !== f.sentAt);
+  expect(altered.slice(0, 5), `${label}: stamps whose send time changed on the way`).toEqual([]);
+
+  const transport = stamped.map((f) => f.arrivedAt - f.sentAt);
+  expect(Math.min(...transport), `${label}: a frame arrived before it was sent`).toBeGreaterThan(0);
+  expect(Math.max(...transport), `${label}: an implausible transport time`).toBeLessThan(1000);
+  return { stamped: stamped.length, rungs: [...new Set(stamped.map((f) => f.rung))] };
 };
 
 // Each context gets its own instrument: the publisher's counts what it stamped, the player's
@@ -458,8 +495,10 @@ test.describe('the frame stamp survives the Engine', () => {
       await viewer.waitForTimeout(10_000);
 
       const stats = await inboundVideoStats(viewer);
-      const sent = summarize('wss -> wss, publisher', await readInstrument(publisher));
-      const read = summarize('wss -> wss, player', await readInstrument(viewer));
+      const publisherData = await readInstrument(publisher);
+      const playerData = await readInstrument(viewer);
+      const sent = summarize('wss -> wss, publisher', publisherData);
+      const read = summarize('wss -> wss, player', playerData);
       console.log(`inbound stats: ${JSON.stringify(stats)}`);
 
       // Without H.264 the marker question is meaningless, so this is checked before it.
@@ -467,6 +506,7 @@ test.describe('the frame stamp survives the Engine', () => {
       expect(sent.sentTotal, 'the publisher stamped nothing').toBeGreaterThan(30);
       expect(read.framesReceived, 'no encoded frames reached the player').toBeGreaterThan(30);
       expect(read.markerRate).toBe(1);
+      expectStampsFromPublisher(publisherData, playerData, 'wss -> wss');
     } finally {
       await pubContext.close();
       await playContext.close();
@@ -488,13 +528,16 @@ test.describe('the frame stamp survives the Engine', () => {
       await viewer.waitForTimeout(10_000);
 
       const stats = await inboundVideoStats(viewer);
-      summarize('wss -> WHEP, publisher', await readInstrument(publisher));
-      const read = summarize('wss -> WHEP, player', await readInstrument(viewer));
+      const publisherData = await readInstrument(publisher);
+      const playerData = await readInstrument(viewer);
+      summarize('wss -> WHEP, publisher', publisherData);
+      const read = summarize('wss -> WHEP, player', playerData);
       console.log(`inbound stats: ${JSON.stringify(stats)}`);
 
       expect(stats?.mimeType, 'the session has to be H.264 for an SEI to exist').toMatch(/H264/i);
       expect(read.framesReceived, 'no encoded frames reached the WHEP player').toBeGreaterThan(30);
       expect(read.markerRate).toBe(1);
+      expectStampsFromPublisher(publisherData, playerData, 'wss -> WHEP');
     } finally {
       await pubContext.close();
       await playContext.close();
@@ -590,10 +633,11 @@ test.describe('the open question: does the marker survive the simulcast rungs', 
           await waitForRendition(viewer, streamName, row.rid);
           await joinPresentedFrames(viewer, '#player-video');
           await viewer.waitForTimeout(10_000);
-          const read = summarize(`simulcast rung _${row.rid}, stamp=${stamp}`, await readInstrument(viewer));
+          const raw = await readInstrument(viewer);
+          const read = summarize(`simulcast rung _${row.rid}, stamp=${stamp}`, raw);
           const inbound = await inboundVideoStats(viewer);
           console.log(`_${row.rid} inbound: ${JSON.stringify(inbound)}`);
-          result.rungs[row.rid] = { played: true, read, inbound };
+          result.rungs[row.rid] = { played: true, read, raw, inbound };
         } catch (error) {
           result.rungs[row.rid] = { played: false, error: error.message.split('\n')[0] };
         } finally {
@@ -601,7 +645,8 @@ test.describe('the open question: does the marker survive the simulcast rungs', 
         }
       }
 
-      result.publisher = summarize(`simulcast publisher, stamp=${stamp}`, await readInstrument(publisher));
+      result.publisherRaw = await readInstrument(publisher);
+      result.publisher = summarize(`simulcast publisher, stamp=${stamp}`, result.publisherRaw);
       console.log(`rungs skipped, stamp=${stamp}: ${JSON.stringify(result.skipped)}`);
       return result;
     } finally {
@@ -635,6 +680,9 @@ test.describe('the open question: does the marker survive the simulcast rungs', 
     expect(Object.keys(measured.publisher.sentByRung).length,
       `simulcast was not active: ${JSON.stringify(measured.publisher.sentByRung)}`)
       .toBeGreaterThanOrEqual(2);
+    // And the stamps carried more than rung 0, so a nonzero rung byte is on the wire.
+    const rungIndices = new Set(measured.publisherRaw.sentStamps.map((s) => s.rungIndex));
+    expect(Math.max(...rungIndices), 'every stamp carried rung 0').toBeGreaterThan(0);
 
     // Informational. If rid ever appears, the probe could key on it, which survives a
     // renegotiation where an SSRC may not.
@@ -652,6 +700,9 @@ test.describe('the open question: does the marker survive the simulcast rungs', 
         + `which is the stamp breaking the Engine's rung republish: ${outcome.error}`).toBe(true);
       expect(outcome.read.framesReceived, `rung _${rung} delivered no frames`).toBeGreaterThan(30);
       expect(outcome.read.markerRate, `the marker did not survive rung _${rung}`).toBe(1);
+      // The join is on rung as well as sequence, so this is also the rung byte surviving.
+      const joined = expectStampsFromPublisher(measured.publisherRaw, outcome.raw, `rung _${rung}`);
+      console.log(`rung _${rung}: stamp rung values seen ${JSON.stringify(joined.rungs)}`);
       expect(outcome.inbound.frameWidth,
         `rung _${rung} was not rescaled, so it does not test what killed the pixel stamp`)
         .toBeLessThan(640);
@@ -912,7 +963,7 @@ test.describe('a stalled publisher produces missed frames, not a wrong number', 
 test.describe('same-machine clock modes agree', () => {
   // Mode A: publisher and player in one JS context (the split view). Mode B: two contexts on
   // one machine. Both read the same OS clock, so the transport figures should agree.
-  test('the split view and two contexts report the same Engine leg', async ({ browser }) => {
+  test('the split view and two contexts report the same transport leg', async ({ browser }) => {
     test.setTimeout(240_000);
 
     const modeA = await (async () => {
@@ -1095,9 +1146,10 @@ test.describe('a stopped session lets go', () => {
   });
 
   /*
-   * The stamping flag lets the panel call two clocks identical and skip the uncertainty gate.
-   * Left set after a stop, a later play-only session in the same page would claim one browser.
-   * A reload would reset the flag and pass for the wrong reason.
+   * A page that has stamped before must not claim one context for somebody else's stream. The
+   * claim now rests on the frames being this page's own, not on a stamping flag, and this pins
+   * that: the page publishes, stops, and plays another page's stream without a reload, which
+   * would reset the module state and pass for the wrong reason.
    */
   test('a stopped publisher does not make the next playback claim one clock', async ({ browser }) => {
     const context = await browser.newContext();
@@ -1137,11 +1189,13 @@ test.describe('a stopped session lets go', () => {
     await page.waitForTimeout(4000);
 
     const clockRow = page.locator('.wz-latency__table tr').filter({ hasText: 'Clock' }).first();
-    // Two contexts on one machine do share a clock, so "one clock" is the honest reading here.
-    // "one browser" is the claim only a stale stamping flag can produce.
-    await expect(clockRow, 'a stale stamping flag claimed one browser across two of them')
-      .not.toContainText('one browser');
-    await expect(clockRow).toContainText('exact');
+    // The frames are another page's, so "this page's own stream" is the one wrong reading. What
+    // is right depends on the round trip: exact (one clock) against a local Engine, an estimate
+    // with its bound, or a refusal, further away.
+    await expect(clockRow).toContainText(/exact \(one clock\)|\u00b1|syncing|too uncertain/,
+      { timeout: 15_000 });
+    await expect(clockRow, 'a stale stamping flag claimed this page\'s own stream')
+      .not.toContainText("this page's own stream");
 
     await other.close();
     await context.close();
@@ -1150,6 +1204,43 @@ test.describe('a stopped session lets go', () => {
 
 // The time drawn onto every frame before encode, replacing the published video track.
 test.describe('burned-in clock', () => {
+
+  // Which track the preview shows: the derived one is a MediaStreamTrackGenerator.
+  const previewTrack = (page) => page.evaluate(() => {
+    const stream = document.getElementById('publisher-video')?.srcObject;
+    const track = stream && stream.getVideoTracks()[0];
+    if (!track) return null;
+    return {
+      readyState: track.readyState,
+      derived: typeof MediaStreamTrackGenerator === 'function'
+        && track instanceof MediaStreamTrackGenerator,
+    };
+  });
+
+  /*
+   * The top-left corner of the preview, inside the clock's black plate and clear of its text
+   * (the text starts one padding in). Average luma 0-255 and a checksum of the pixels.
+   */
+  const corner = (page) => page.evaluate(() => {
+    const video = document.getElementById('publisher-video');
+    if (!video || !video.videoWidth) return null;
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(video, 0, 0);
+    const size = 6;
+    const { data } = ctx.getImageData(0, 0, size, size);
+    let luma = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      luma += 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+    }
+    // The clock's digits, which change every frame: the plate row the text sits in.
+    const text = ctx.getImageData(0, 0, Math.min(canvas.width, 200), 40).data;
+    let sum = 0;
+    for (let i = 0; i < text.length; i += 4) sum = (sum * 31 + text[i]) % 1_000_003;
+    return { luma: luma / (size * size), textSum: sum };
+  });
 
   const hookConnections = (page) => page.addInitScript(() => {
     const Original = window.RTCPeerConnection;
@@ -1198,14 +1289,21 @@ test.describe('burned-in clock', () => {
     await page.goto('/#/publish');
     await waitForCamera(page);
     await openTab(page, 'Advanced');
+    const before = await corner(page);
     await page.locator('#publishBurnedClock').check();
 
     // The preview carries the derived track, not the raw camera.
-    await expect.poll(async () => page.evaluate(() => {
-      const stream = document.getElementById('publisher-video')?.srcObject;
-      const track = stream && stream.getVideoTracks()[0];
-      return track ? track.readyState : null;
-    }), { timeout: 10_000 }).toBe('live');
+    await expect.poll(() => previewTrack(page), { timeout: 10_000 })
+      .toEqual({ readyState: 'live', derived: true });
+
+    // And the pixels are the clock's: a black plate in the corner, digits that keep moving.
+    await expect.poll(async () => (await corner(page))?.luma ?? 255, { timeout: 10_000 })
+      .toBeLessThan(40);
+    const first = await corner(page);
+    await page.waitForTimeout(300);
+    const later = await corner(page);
+    console.log(`corner before the clock ${JSON.stringify(before)}, with it ${JSON.stringify(first)}`);
+    expect(later.textSum, 'the digits did not change in 300 ms').not.toBe(first.textSum);
   });
 
   /*
@@ -1238,20 +1336,42 @@ test.describe('burned-in clock', () => {
       .toBeGreaterThan(before.framesEncoded + 20);
   });
 
+  // Camera off, clock on, camera on: the camera under the clock has to come back too.
+  test('the camera toggle switches the camera under the clock', async ({ page }) => {
+    const tracks = () => page.evaluate(() => {
+      const track = document.getElementById('publisher-video')?.srcObject?.getVideoTracks()[0];
+      const camera = track && track.__wzClockSource;
+      return track ? { published: track.enabled, camera: camera ? camera.enabled : null } : null;
+    });
+
+    await page.goto('/#/publish');
+    await waitForCamera(page);
+    await openTab(page, 'Source');
+    await page.locator('#camera-toggle').click();
+    await openTab(page, 'Advanced');
+    await page.locator('#publishBurnedClock').check();
+
+    // Off: both the derived track and the camera behind it.
+    await expect.poll(tracks, { timeout: 10_000 }).toEqual({ published: false, camera: false });
+
+    await openTab(page, 'Source');
+    await page.locator('#camera-toggle').click();
+    await expect.poll(tracks, { timeout: 10_000 }).toEqual({ published: true, camera: true });
+  });
+
   test('turning it off puts the camera back', async ({ page }) => {
     await page.goto('/#/publish');
     await waitForCamera(page);
     await openTab(page, 'Advanced');
 
     await page.locator('#publishBurnedClock').check();
-    await page.waitForTimeout(500);
+    await expect.poll(() => previewTrack(page), { timeout: 10_000 })
+      .toEqual({ readyState: 'live', derived: true });
     await page.locator('#publishBurnedClock').uncheck();
 
-    await expect.poll(async () => page.evaluate(() => {
-      const stream = document.getElementById('publisher-video')?.srcObject;
-      const track = stream && stream.getVideoTracks()[0];
-      return track ? track.readyState : null;
-    }), { timeout: 10_000 }).toBe('live');
+    // The camera itself, live, not the derived track and not a stopped one.
+    await expect.poll(() => previewTrack(page), { timeout: 10_000 })
+      .toEqual({ readyState: 'live', derived: false });
   });
 });
 
@@ -1292,6 +1412,10 @@ test.describe('how these numbers are measured', () => {
     await page.locator('#measurement-help-open').click();
     await expect(dialog).toBeVisible();
     await expect(dialog).toContainText('do not add up');
+    // Named, so a screen reader announces what opened; the opener says what it opens.
+    await expect(page.getByRole('dialog', { name: 'How these numbers are measured' })).toBeVisible();
+    await expect(page.locator('#measurement-help-open'))
+      .toHaveAccessibleName(/how the latency figures are measured/i);
 
     await page.keyboard.press('Escape');
     await expect(dialog).toBeHidden();
@@ -1321,31 +1445,47 @@ test.describe('how these numbers are measured', () => {
       .toContainText('larger than this');
   });
 
+  /*
+   * Playwright's default color scheme is light and the app follows the system, so the dark pass
+   * has to ask for dark. Checked on the title and on the body text, which uses the muted and
+   * subtle tokens: 7:1 for the title, 4.5:1 (WCAG AA) for body text.
+   */
   test('is readable in both themes', async ({ page }) => {
-    await openPanel(page);
-    await page.locator('#measurement-help-open').click();
-
-    const contrast = () => page.evaluate(() => {
+    const contrast = (selector) => page.evaluate((sel) => {
       const luminance = (colour) => {
-        const [r, g, b] = colour.match(/\d+/g).map(Number).map((v) => {
+        const [r, g, b] = colour.match(/\d+(\.\d+)?/g).slice(0, 3).map(Number).map((v) => {
           const c = v / 255;
           return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
         });
         return 0.2126 * r + 0.7152 * g + 0.0722 * b;
       };
-      const style = getComputedStyle(document.getElementById('measurement-help'));
-      const text = luminance(style.color);
-      const behind = luminance(style.backgroundColor);
+      const element = document.querySelector(sel);
+      const text = luminance(getComputedStyle(element).color);
+      const behind = luminance(getComputedStyle(document.getElementById('measurement-help')).backgroundColor);
       return (Math.max(text, behind) + 0.05) / (Math.min(text, behind) + 0.05);
-    });
+    }, selector);
 
-    expect(await contrast()).toBeGreaterThan(7);
+    const check = async (theme) => {
+      await expect(page.locator('html')).toHaveAttribute('data-bs-theme', theme);
+      await page.locator('#measurement-help-open').click();
+      expect(await contrast('#measurement-help'), `${theme}: dialog text`).toBeGreaterThan(7);
+      expect(await contrast('#measurement-help-title'), `${theme}: title`).toBeGreaterThan(7);
+      // --wz-text-muted
+      expect(await contrast('#measurement-help .wz-help__body p'), `${theme}: body text`)
+        .toBeGreaterThan(4.5);
+      // --wz-text-subtle
+      expect(await contrast('#measurement-help .wz-help__body h3'), `${theme}: headings`)
+        .toBeGreaterThan(4.5);
+    };
+
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await openPanel(page);
+    await check('dark');
 
     await page.evaluate(() => window.localStorage.setItem('wz.theme', 'light'));
     await page.reload();
     await openPanel(page);
-    await page.locator('#measurement-help-open').click();
-    expect(await contrast()).toBeGreaterThan(7);
+    await check('light');
   });
 });
 
@@ -1382,11 +1522,12 @@ test.describe('the combined page clock', () => {
     const row = (name) => rows.filter({ hasText: name }).first();
 
     await expect(row('Clock')).toContainText('exact', { timeout: 20_000 });
-    await expect(row('Clock')).toContainText('one browser');
+    await expect(row('Clock')).toContainText("this page's own stream");
 
-    // And the figures are figures, not dashes.
-    for (const name of ['Publisher to player', 'Player decode and display', 'Total']) {
+    // And the figures are figures, not dashes, with no bound: the offset is zero by proof.
+    for (const name of ['Publisher to player', 'Player jitter buffer', 'Total']) {
       await expect(row(name)).toContainText(/\d+\s*ms/, { timeout: 20_000 });
+      await expect(row(name)).not.toContainText('\u00b1');
     }
   });
 });
@@ -1588,8 +1729,8 @@ test.describe('regressions from real use', () => {
       };
     });
 
-    expect(figures.transport, 'the Engine leg').toBeGreaterThan(0);
-    expect(figures.player, 'the player decode and display leg').not.toBeNull();
+    expect(figures.transport, 'the transport leg').toBeGreaterThan(0);
+    expect(figures.player, 'the player jitter buffer, decode and display leg').not.toBeNull();
     expect(figures.total, 'the total').not.toBeNull();
     expect(figures.total).toBeGreaterThanOrEqual(figures.transport);
 
