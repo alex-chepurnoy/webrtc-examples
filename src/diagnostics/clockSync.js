@@ -30,6 +30,13 @@ export const STABILITY_SAMPLES = 3;
 export const CLOCK_GRANULARITY_MS = 2;
 
 /*
+ * Date.now() returns whole milliseconds, so each of t0 to t3 can be up to 1 ms early, and so can
+ * any latency taken as the difference of two readings. Added to every bound this module
+ * reports, so no figure claims a precision the clock does not have.
+ */
+export const TIMER_RESOLUTION_MS = 1;
+
+/*
  * Policy from the design, not from data: above this the UI shows "too uncertain to measure".
  * The estimator does not apply it; what to display is the caller's call.
  */
@@ -63,6 +70,11 @@ const measure = (sample) => {
 
   return { rtt, offset: ((t1 - t0) + (t2 - t3)) / 2 };
 };
+
+/** How many of the samples in the window can be used, which is what MIN_SAMPLES counts. */
+export const countUsableSamples = (samples) => (Array.isArray(samples)
+  ? samples.slice(-WINDOW_SAMPLES).map(measure).filter((m) => m !== null).length
+  : 0);
 
 /**
  * Estimate the far end's clock offset from round-trip samples, oldest first (only the last
@@ -103,8 +115,8 @@ export const estimateOffset = (samples) => {
 
   return {
     offsetMs: best.offset,
-    // The bound on the asymmetry error, which is the only error this estimator has.
-    uncertaintyMs: best.rtt / 2,
+    // The bound on the asymmetry error, plus the resolution of the readings it was taken from.
+    uncertaintyMs: best.rtt / 2 + TIMER_RESOLUTION_MS,
     samples: usable.length,
   };
 };

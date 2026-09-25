@@ -8,7 +8,9 @@ import {
   addEmulationPrevention,
   buildSeiPayload,
   findSeiPayload,
+  insertStamp,
   removeEmulationPrevention,
+  stampInsertionOffset,
 } from './frameStamp';
 
 const START_CODE = [0x00, 0x00, 0x00, 0x01];
@@ -21,6 +23,7 @@ const sps = () => nal(0x67, 0x42, 0xc0, 0x1f, 0x8c, 0x8d, 0x40, 0x50);
 const pps = () => nal(0x68, 0xce, 0x3c, 0x80);
 const idrSlice = () => nal(0x65, 0x88, 0x84, 0x21, 0x33, 0xff, 0xa1);
 const deltaSlice = () => nal(0x41, 0x9a, 0x24, 0x6c, 0x41, 0x7f);
+const aud = () => nal(0x09, 0xf0);
 
 const frame = (...parts) => Uint8Array.from(parts.flat());
 
@@ -195,9 +198,10 @@ describe('finding the stamp in a real looking frame', () => {
     expect(findSeiPayload(bytes)).toEqual(stamp);
   });
 
-  it('finds it after the slice, where nothing guarantees it will not be', () => {
+  // An SEI after the first slice belongs to the next picture, and the slice data is not searched.
+  it('stops at the first slice rather than scanning the picture data', () => {
     const bytes = frame(sps(), pps(), idrSlice(), [...buildSeiPayload(stamp)]);
-    expect(findSeiPayload(bytes)).toEqual(stamp);
+    expect(findSeiPayload(bytes)).toBeNull();
   });
 
   it('finds it past a foreign SEI NAL', () => {
@@ -227,6 +231,71 @@ describe('finding the stamp in a real looking frame', () => {
     const bytes = frame(sps(), [...buildSeiPayload(stamp)], idrSlice());
     expect(findSeiPayload(bytes.buffer)).toEqual(stamp);
     expect(findSeiPayload(new DataView(bytes.buffer))).toEqual(stamp);
+  });
+});
+
+/* The NAL headers of a built frame, in order, to check where the stamp landed. */
+const nalTypes = (bytes) => {
+  const types = [];
+  for (let index = 0; index + 3 < bytes.length; index += 1) {
+    if (bytes[index] === 0 && bytes[index + 1] === 0 && bytes[index + 2] === 1) {
+      types.push(bytes[index + 3] & 0x1f);
+      index += 2;
+    }
+  }
+  return types;
+};
+
+describe('placing the stamp in a frame', () => {
+  const stamp = { sequence: 12, sentAt: 1_726_600_000_789, rung: 3 };
+
+  // H.264 ordering: the delimiter first, every SEI before the first slice (7.4.1.2.3).
+  it('goes after the delimiter and parameter sets, immediately before the slice', () => {
+    const original = frame(aud(), sps(), pps(), idrSlice());
+    const stamped = insertStamp(original, stamp);
+    expect(nalTypes(stamped)).toEqual([9, 7, 8, 6, 5]);
+    expect(findSeiPayload(stamped)).toEqual(stamp);
+  });
+
+  it('keeps an existing SEI ahead of ours, so a buffering period SEI stays first', () => {
+    const stamped = insertStamp(frame(aud(), foreignSeiNal(), deltaSlice()), stamp);
+    expect(nalTypes(stamped)).toEqual([9, 6, 6, 1]);
+    expect(findSeiPayload(stamped)).toEqual(stamp);
+  });
+
+  it('goes first on a delta frame that is only a slice', () => {
+    const stamped = insertStamp(frame(deltaSlice()), stamp);
+    expect(nalTypes(stamped)).toEqual([6, 1]);
+    expect(findSeiPayload(stamped)).toEqual(stamp);
+  });
+
+  it('copies every original byte, in order, around the stamp', () => {
+    const original = frame(aud(), sps(), pps(), idrSlice());
+    const stamped = insertStamp(original, stamp);
+    const offset = stampInsertionOffset(original);
+    const sei = buildSeiPayload(stamp);
+    expect([...stamped.subarray(0, offset)]).toEqual([...original.subarray(0, offset)]);
+    expect([...stamped.subarray(offset, offset + sei.length)]).toEqual([...sei]);
+    expect([...stamped.subarray(offset + sei.length)]).toEqual([...original.subarray(offset)]);
+  });
+
+  it('takes the leading zero of a four-byte start code with the slice it belongs to', () => {
+    const original = frame(sps(), idrSlice());
+    // The slice's start code begins at the zero_byte, one past the end of the SPS.
+    expect(stampInsertionOffset(original)).toBe(sps().length);
+  });
+
+  it.each([
+    ['no start code, as a VP8, VP9 or AV1 frame has', Uint8Array.from([0x50, 0x42, 0x00, 0x9d, 0x01, 0x2a])],
+    ['an HEVC VPS, whose header is not an H.264 NAL here', frame(nal(0x40, 0x01, 0x0c), nal(0x26, 0x01, 0xaf))],
+    ['an HEVC delta slice, header 0x02 0x01', frame(nal(0x02, 0x01, 0xd0, 0x2f))],
+    ['an SEI that claims to be a reference, which H.264 forbids', frame(nal(0x26, 0x01), idrSlice())],
+    ['no slice at all', frame(sps(), pps())],
+    ['a forbidden_zero_bit set', frame(nal(0xe5, 0x88))],
+    ['nothing', new Uint8Array(0)],
+  ])('refuses a frame with %s', (_label, bytes) => {
+    expect(stampInsertionOffset(bytes)).toBeNull();
+    expect(insertStamp(bytes, stamp)).toBeNull();
   });
 });
 

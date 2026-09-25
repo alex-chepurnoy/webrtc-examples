@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest';
 import {
   CLOCK_GRANULARITY_MS,
   MIN_SAMPLES,
+  TIMER_RESOLUTION_MS,
   WINDOW_SAMPLES,
+  countUsableSamples,
   estimateOffset,
 } from './clockSync';
 
@@ -25,7 +27,7 @@ describe('estimateOffset', () => {
     const estimate = estimateOffset(rtts.map((rttMs) => roundTrip({ offsetMs: 137, rttMs })));
 
     expect(estimate.offsetMs).toBe(137);
-    expect(estimate.uncertaintyMs).toBe(12.5); // the 25 ms round trip, halved
+    expect(estimate.uncertaintyMs).toBe(12.5 + TIMER_RESOLUTION_MS); // 25 ms halved, plus 1
     expect(estimate.samples).toBe(10);
   });
 
@@ -37,13 +39,25 @@ describe('estimateOffset', () => {
     const estimate = estimateOffset([...slow, fast]);
 
     expect(estimate.offsetMs).toBe(50);
-    expect(estimate.uncertaintyMs).toBe(10);
+    expect(estimate.uncertaintyMs).toBe(10 + TIMER_RESOLUTION_MS);
   });
 
-  // Half the fastest round trip, exactly, and not rounded on the way out.
-  it('reports the uncertainty as rtt_min / 2', () => {
+  // Half the fastest round trip, exactly, and not rounded on the way out, plus the resolution.
+  it('reports the uncertainty as rtt_min / 2 plus the Date.now resolution', () => {
     const estimate = estimateOffset(repeat(MIN_SAMPLES, (i) => roundTrip({ rttMs: 21 + i * 10 })));
-    expect(estimate.uncertaintyMs).toBe(10.5);
+    expect(estimate.uncertaintyMs).toBe(10.5 + TIMER_RESOLUTION_MS);
+  });
+
+  // A zero round trip is still two whole-millisecond readings, not an error of zero.
+  it('never reports an uncertainty below the resolution of Date.now', () => {
+    const estimate = estimateOffset(repeat(MIN_SAMPLES, () => roundTrip({ rttMs: 0 })));
+    expect(estimate.uncertaintyMs).toBe(TIMER_RESOLUTION_MS);
+  });
+
+  it('counts the usable samples, which is what the minimum applies to', () => {
+    const junk = repeat(5, () => null);
+    expect(countUsableSamples([...junk, ...repeat(3, () => roundTrip())])).toBe(3);
+    expect(countUsableSamples(null)).toBe(0);
   });
 
   // Null, not zero: zero is a legitimate same-machine offset.
@@ -117,7 +131,7 @@ describe('estimateOffset', () => {
 
       const estimate = estimateOffset(loopback);
       expect(estimate.offsetMs).toBe(0);
-      expect(estimate.uncertaintyMs).toBe(0);
+      expect(estimate.uncertaintyMs).toBe(TIMER_RESOLUTION_MS);
     });
   });
 
@@ -191,7 +205,7 @@ describe('estimateOffset', () => {
 
     const estimate = estimateOffset(skewed);
     expect(estimate.offsetMs).toBe(40);
-    expect(estimate.uncertaintyMs).toBe(50);
+    expect(estimate.uncertaintyMs).toBe(50 + TIMER_RESOLUTION_MS);
     expect(Math.abs(estimate.offsetMs)).toBeLessThanOrEqual(estimate.uncertaintyMs);
   });
 });

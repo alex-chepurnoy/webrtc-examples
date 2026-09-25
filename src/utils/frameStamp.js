@@ -5,8 +5,12 @@
  *
  * Pure bytes: no DOM, no WebRTC, no React.
  *
- * SEI is H.264 only. VP8, VP9, AV1 and transcoding applications all read as "no stamp", which
- * the caller must present as unavailable rather than as zero latency.
+ * SEI is H.264 only: a VP8, VP9 or AV1 frame carries no stamp, and insertStamp refuses a frame
+ * that does not parse as H.264, so it cannot write one there. What a transcoding application does
+ * with the SEI is not tested here. A decoder and re-encoder would be expected to drop it, which
+ * reads as "no stamp"; one that copied it across would carry the source frame's send time on the
+ * re-encoded frame. Either way the caller presents a missing stamp as unavailable, never as zero
+ * latency.
  */
 
 /*
@@ -98,9 +102,9 @@ const isWholeNumberInRange = (value, limit) =>
   Number.isInteger(value) && value >= 0 && value <= limit;
 
 /**
- * Builds the complete Annex B SEI NAL, ready to prepend to an encoded frame: start code, NAL
- * header 0x06 (nal_ref_idc 0), payload type 5 (user_data_unregistered), size, UUID, fields,
- * stop byte.
+ * Builds the complete Annex B SEI NAL that insertStamp places in an encoded frame: start
+ * code, NAL header 0x06 (nal_ref_idc 0), payload type 5 (user_data_unregistered), size, UUID,
+ * fields, stop byte.
  *
  * Throws on an out-of-range value rather than wrapping it into a plausible wrong number.
  */
@@ -141,26 +145,124 @@ const asBytes = (frameBytes) => {
   return null;
 };
 
-/**
- * Splits an Annex B frame into NAL units. Trailing zeros belong to the separator, so they are
- * trimmed; otherwise they look like the start of another SEI message.
- */
-const splitNalUnits = (bytes) => {
-  const starts = [];
-  for (let index = 0; index + 2 < bytes.length; index += 1) {
+/** Where the next three-byte start code begins at or after `from`, or -1. */
+const nextStartCode = (bytes, from) => {
+  for (let index = from; index + 2 < bytes.length; index += 1) {
     if (bytes[index] === 0x00 && bytes[index + 1] === 0x00 && bytes[index + 2] === 0x01) {
-      starts.push(index + 3);
-      index += 2;
+      return index;
     }
   }
+  return -1;
+};
 
-  return starts.map((start, position) => {
-    const nextStart = starts[position + 1];
-    // Back off the next start code itself, plus the zero that may precede a four-byte one.
-    let end = nextStart === undefined ? bytes.length : nextStart - 3;
+const NAL_TYPE_SLICE = 1;
+const NAL_TYPE_IDR = 5;
+const NAL_TYPE_SPS = 7;
+const NAL_TYPE_PPS = 8;
+const NAL_TYPE_AUD = 9;
+
+/* Types 1 to 5 carry picture data. Everything that belongs to a picture comes before the first. */
+const isVclType = (type) => type >= 1 && type <= 5;
+
+/**
+ * Walks the NAL units of an Annex B frame lazily, calling `visit(nal)` with
+ * { header, type, codeAt, start, end } until it returns true or the frame ends. `codeAt` is where
+ * the NAL's start code begins, including the zero_byte of a four-byte one. `end` excludes the
+ * trailing zeros that belong to the next start code. Only the bytes up to the NAL the visitor
+ * stops at are scanned, so a caller that stops at the first slice never reads the slice data.
+ */
+const walkNalUnits = (bytes, visit) => {
+  let code = nextStartCode(bytes, 0);
+  while (code !== -1) {
+    const start = code + 3;
+    if (start >= bytes.length) return;
+    const header = bytes[start];
+    const codeAt = code > 0 && bytes[code - 1] === 0x00 ? code - 1 : code;
+    const type = header & 0x1f;
+
+    // The end of a slice is never needed, so its bytes are never scanned.
+    const next = isVclType(type) ? -1 : nextStartCode(bytes, start);
+    let end = next === -1 ? bytes.length : next;
     while (end > start && bytes[end - 1] === 0x00) end -= 1;
-    return bytes.subarray(start, end);
+
+    if (visit({ header, type, codeAt, start, end }) === true) return;
+    if (next === -1) return;
+    code = next;
+  }
+};
+
+/*
+ * The NAL headers an H.264 encoder puts ahead of the first slice, and the slices themselves,
+ * each with the nal_ref_idc the standard allows it. Anything else, including every NAL header of
+ * an HEVC keyframe or delta frame read as H.264, means "not a frame this module understands".
+ */
+const isPlausibleH264Header = (header) => {
+  if ((header & 0x80) !== 0) return false; // forbidden_zero_bit
+  const referenced = (header & 0x60) !== 0;
+  switch (header & 0x1f) {
+    case NAL_TYPE_SEI:
+    case NAL_TYPE_AUD:
+      return !referenced;
+    case NAL_TYPE_SPS:
+    case NAL_TYPE_PPS:
+    case NAL_TYPE_IDR:
+      return referenced;
+    case NAL_TYPE_SLICE:
+      return true;
+    default:
+      return false;
+  }
+};
+
+/**
+ * Where the stamp goes in an encoded frame: immediately in front of the first slice, which is
+ * after any access unit delimiter, parameter sets and existing SEI. H.264 requires the delimiter
+ * to come first and every SEI to come before the first slice (7.4.1.2.3), and keeping existing
+ * SEI ahead of ours keeps a buffering period SEI first. Returns the byte offset, or null when the
+ * frame does not start with a start code, carries a NAL header H.264 does not allow here, or has
+ * no slice at all: VP8, VP9 and AV1 frames have no start code, and an HEVC frame fails the header
+ * check, so none of them can be stamped by mistake.
+ */
+export const stampInsertionOffset = (frameBytes) => {
+  const bytes = asBytes(frameBytes);
+  if (bytes === null || bytes.length < 4) return null;
+  const first = nextStartCode(bytes, 0);
+  // Annex B starts at the first byte, with an optional leading zero_byte.
+  if (first !== 0 && !(first === 1 && bytes[0] === 0x00)) return null;
+
+  let offset = null;
+  let plausible = true;
+  walkNalUnits(bytes, (nal) => {
+    if (!isPlausibleH264Header(nal.header)) {
+      plausible = false;
+      return true;
+    }
+    if (isVclType(nal.type)) {
+      offset = nal.codeAt;
+      return true;
+    }
+    return false;
   });
+  return plausible ? offset : null;
+};
+
+/**
+ * The encoded frame with the stamp inserted in front of its first slice, as a fresh Uint8Array,
+ * or null when the frame is not H.264 this module can place a stamp in (see
+ * stampInsertionOffset). The existing NALs are copied unchanged. A caller given null sends the
+ * frame untouched.
+ */
+export const insertStamp = (frameBytes, stamp) => {
+  const bytes = asBytes(frameBytes);
+  const offset = stampInsertionOffset(bytes);
+  if (offset === null) return null;
+
+  const sei = buildSeiPayload(stamp);
+  const stamped = new Uint8Array(bytes.length + sei.length);
+  stamped.set(bytes.subarray(0, offset), 0);
+  stamped.set(sei, offset);
+  stamped.set(bytes.subarray(offset), offset + sei.length);
+  return stamped;
 };
 
 /*
@@ -225,21 +327,23 @@ const readStampFromSeiRbsp = (rbsp) => {
  * Finds our stamp in an encoded frame, or returns null for anything that does not carry one.
  * The caller reports null as "no frame stamp", never as zero latency.
  *
- * The marker is not assumed to be the first NAL: nothing guarantees its position after the
- * Engine, and a keyframe carries SPS and PPS first.
+ * The marker is not assumed to be the first NAL: a keyframe carries SPS and PPS first, and
+ * nothing guarantees position after the Engine. The search stops at the first slice, because an
+ * SEI after it would belong to the next picture, and because the slice data is almost all of the
+ * frame and holds nothing to find.
  */
 export const findSeiPayload = (frameBytes) => {
   const bytes = asBytes(frameBytes);
   if (bytes === null || bytes.length === 0) return null;
 
-  for (const nal of splitNalUnits(bytes)) {
-    if (nal.length < 2) continue;
+  let stamp = null;
+  walkNalUnits(bytes, ({ header, type, start, end }) => {
     // Bit 7 is forbidden_zero_bit: set means this is not a NAL header we understand.
-    if ((nal[0] & 0x80) !== 0) continue;
-    if ((nal[0] & 0x1f) !== NAL_TYPE_SEI) continue;
-
-    const stamp = readStampFromSeiRbsp(removeEmulationPrevention(nal.subarray(1)));
-    if (stamp !== null) return stamp;
-  }
-  return null;
+    if ((header & 0x80) !== 0) return false;
+    if (isVclType(type)) return true;
+    if (type !== NAL_TYPE_SEI || end - start < 2) return false;
+    stamp = readStampFromSeiRbsp(removeEmulationPrevention(bytes.subarray(start + 1, end)));
+    return stamp !== null;
+  });
+  return stamp;
 };

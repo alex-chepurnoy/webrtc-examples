@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import { MAX_SEQUENCE, findSeiPayload } from '../utils/frameStamp';
-import { MAX_TRUSTED_UNCERTAINTY_MS, MIN_SAMPLES } from './clockSync';
+import { MAX_TRUSTED_UNCERTAINTY_MS, MIN_SAMPLES, TIMER_RESOLUTION_MS } from './clockSync';
 import {
   CLOCK_CHANNEL_LABEL,
+  SENT_MEMORY,
   STALE_MS,
   buildClockPing,
   newClockSessionId,
@@ -14,11 +15,14 @@ import {
   describeClock,
   frameLatency,
   getSample,
+  isOwnFrame,
   isProbeAvailable,
   median,
+  mediansOverOneFrameSet,
   nextSequenceFor,
   parseClockMessage,
   probeUnavailableReason,
+  recordSentStamp,
   resetProbe,
   stampFrameBytes,
   subscribe,
@@ -47,9 +51,11 @@ const stateWith = (overrides = {}) => ({
 /* One received frame, with both legs measurable unless a field is nulled out. */
 const record = ({
   sequence = 1, sentAt = 1_000_000, transportMs = 100, playerMs = 20, rtpTimestamp = 90_000,
+  own = false,
 } = {}) => ({
   sequence,
   sentAt,
+  own,
   arrivedAt: sentAt + transportMs,
   arrivedAtHighRes: 5_000,
   rtpTimestamp,
@@ -112,6 +118,13 @@ describe('countMissedFrames', () => {
     expect(countMissedFrames(MAX_SEQUENCE - 1, 1)).toBe(2);
   });
 
+  // Exactly half the space is as likely a step back as a step forward, so it is not loss.
+  it('counts nothing for a jump of exactly half the sequence space', () => {
+    expect(countMissedFrames(0, 2 ** 31)).toBe(0);
+    expect(countMissedFrames(2 ** 31, 0)).toBe(0);
+    expect(countMissedFrames(0, 2 ** 31 - 1)).toBe(2 ** 31 - 2);
+  });
+
   it('counts nothing when either side is not a sequence number', () => {
     expect(countMissedFrames(null, 5)).toBe(0);
     expect(countMissedFrames(5, undefined)).toBe(0);
@@ -140,6 +153,15 @@ describe('stampFrameBytes', () => {
     const before = Uint8Array.from(frame);
     stampFrameBytes(frame.buffer, { sequence: 1, sentAt: 2 });
     expect(frame).toEqual(before);
+  });
+
+  // The provisional decision says stamp before negotiation; the frame itself still has to agree.
+  it('refuses a frame that is not H.264, whatever the decision said', () => {
+    const vp8Key = Uint8Array.from([0x50, 0x42, 0x00, 0x9d, 0x01, 0x2a, 0x80, 0x02, 0xe0, 0x01]);
+    expect(stampFrameBytes(vp8Key.buffer, { sequence: 1, sentAt: 2 })).toBeNull();
+    // An HEVC keyframe opens with a VPS, header 0x40 0x01, which is not an H.264 NAL here.
+    const hevcKey = Uint8Array.from([0x00, 0x00, 0x00, 0x01, 0x40, 0x01, 0x0c, 0x01, 0xff]);
+    expect(stampFrameBytes(hevcKey.buffer, { sequence: 1, sentAt: 2 })).toBeNull();
   });
 });
 
@@ -193,11 +215,11 @@ describe('describeClock', () => {
     expect(clock.exact).toBe(true);
     expect(clock.mode).toBe('same-clock');
     expect(clock.offsetMs).toBe(0);
-    expect(clock.uncertaintyMs).toBe(0.5);
+    expect(clock.uncertaintyMs).toBe(0.5 + TIMER_RESOLUTION_MS);
   });
 
-  // One clock is provable only when this page is also stamping; a near-zero offset is not proof.
-  it('names one browser only when this page is also the publisher', () => {
+  // One browser is claimed only on proof that the frames are this page's own.
+  it('names one browser only when the frames are proven to be this page\'s own', () => {
     const samples = repeat(10, () => roundTrip({ rttMs: 1, offsetMs: 0 }));
     expect(describeClock(samples, { sameContext: true }).mode).toBe('same-context');
     expect(describeClock(samples, { sameContext: false }).mode).toBe('same-clock');
@@ -209,13 +231,31 @@ describe('describeClock', () => {
     expect(clock.exact).toBe(false);
     expect(clock.mode).toBe('cross-machine');
     expect(clock.offsetMs).toBe(4_000);
-    expect(clock.uncertaintyMs).toBe(10);
+    expect(clock.uncertaintyMs).toBe(10 + TIMER_RESOLUTION_MS);
   });
 
   it('never claims one clock while it is refusing to measure', () => {
     const scattered = repeat(10, (i) => roundTrip({ rttMs: 4, offsetMs: i % 2 === 0 ? 0 : 900 }));
-    expect(describeClock(scattered, { sameContext: true }).exact).toBe(false);
-    expect(describeClock(scattered, { sameContext: true }).mode).toBe(null);
+    expect(describeClock(scattered).exact).toBe(false);
+    expect(describeClock(scattered).mode).toBe(null);
+  });
+
+  // With the topology proven, the offset is zero by construction, not by estimate.
+  it('forces the offset to exactly zero in one context, whatever the samples say', () => {
+    const scattered = repeat(10, (i) => roundTrip({ rttMs: 4, offsetMs: i % 2 === 0 ? 0 : 900 }));
+    const clock = describeClock(scattered, { sameContext: true });
+    expect(clock.state).toBe('ok');
+    expect(clock.offsetMs).toBe(0);
+    expect(clock.exact).toBe(true);
+    expect(describeClock([], { sameContext: true }).offsetMs).toBe(0);
+  });
+
+  // The first seconds of a session are not a failure and must not read as one.
+  it('marks the first seconds as warming up, counting only usable samples', () => {
+    const junk = repeat(MIN_SAMPLES, () => null);
+    const clock = describeClock([...junk, ...repeat(2, () => roundTrip())]);
+    expect(clock.warming).toBe(true);
+    expect(clock.reason).toBe(`Exchanging clock samples (2 of ${MIN_SAMPLES}).`);
   });
 
   // Above the threshold there is no number at all: a confidently wrong latency is the failure.
@@ -286,7 +326,7 @@ describe('summarizeProbe', () => {
     expect(sample.totalMs).toBe(null);
   });
 
-  it('goes stale rather than reporting a figure from a stream that stopped', () => {
+  it('marks a stream that stopped as stalled, keeping its last real figures', () => {
     const state = stateWith({
       stampedFrames: 5,
       lastFrameAt: 10_000,
@@ -295,8 +335,36 @@ describe('summarizeProbe', () => {
     });
     const sample = summarizeProbe(state, 10_000 + STALE_MS + 1);
     expect(sample.status).toBe('stalled');
-    expect(sample.transportMs).toBe(null);
+    expect(sample.transportMs).toBe(100);
     expect(sample.reason).toContain('No stamped frame for');
+  });
+
+  // Rows over different frames do not describe one path, so all three use the same frames.
+  it('takes all three medians over the frames that have both legs', () => {
+    const joined = [100, 110, 120].map((transportMs, index) => record({
+      sequence: index, transportMs, playerMs: 20 + index, rtpTimestamp: 90_000 + index,
+    }));
+    // Fast frames the display join has not reached: they must not pull the transport median.
+    const notYetShown = [10, 10, 10, 10].map((transportMs, index) => record({
+      sequence: 10 + index, transportMs, playerMs: null, rtpTimestamp: 91_000 + index,
+    }));
+    const frames = [...joined, ...notYetShown];
+    const sample = summarizeProbe(stateWith({
+      stampedFrames: frames.length, lastFrameAt: 1_000, frames, clockSamples: exactClock,
+    }), 1_000);
+
+    expect(sample.transportMs).toBe(110);
+    expect(sample.playerMs).toBe(21);
+    expect(sample.totalMs).toBe(131);
+    expect(sample.figureFrames).toBe(3);
+  });
+
+  it('falls back to one leg, with no total, when no frame has both', () => {
+    const figures = mediansOverOneFrameSet([
+      { transportMs: 90, playerMs: null, totalMs: null },
+      { transportMs: 95, playerMs: null, totalMs: null },
+    ]);
+    expect(figures).toEqual({ transportMs: 90, playerMs: null, totalMs: null, figureFrames: 2 });
   });
 
   it('reports the median of the window, not the last frame or the mean', () => {
@@ -451,12 +519,17 @@ describe('the subscription', () => {
 
 /*
  * The combined page stamps and reads with one Date.now, but its clock samples still round-trip
- * through the Engine, which can push the bound past trusted and hide every figure.
+ * through the Engine, which can push the bound past trusted and hide every figure. One context is
+ * proven by the frames themselves, never by the page merely having a publisher running.
  */
 describe('one page that both stamps and reads', () => {
   // A wide bound around an offset of zero: the samples agree, the path is just slow.
   const slowButZero = repeat(10, () =>
     roundTrip({ rttMs: MAX_TRUSTED_UNCERTAINTY_MS * 3, offsetMs: 0 }));
+
+  const measuring = (overrides) => stateWith({
+    stampedFrames: 3, lastFrameAt: 1_000, senderStatus: 'stamping', ...overrides,
+  });
 
   it('is refused when nothing says the two ends share a context', () => {
     const clock = describeClock(slowButZero);
@@ -464,19 +537,61 @@ describe('one page that both stamps and reads', () => {
     expect(clock.exact).toBe(false);
   });
 
-  it('is exact when the reader is also the stamper', () => {
-    const clock = describeClock(slowButZero, { sameContext: true });
-    expect(clock.state).toBe('ok');
-    expect(clock.exact).toBe(true);
-    expect(clock.mode).toBe('same-context');
+  it('is exact when every frame in the window is one this page stamped', () => {
+    const frames = repeat(3, (i) => record({ sequence: i, own: true, rtpTimestamp: 90_000 + i }));
+    const sample = summarizeProbe(measuring({ frames, clockSamples: slowButZero }), 1_000);
+    expect(sample.clock.state).toBe('ok');
+    expect(sample.clock.exact).toBe(true);
+    expect(sample.clock.mode).toBe('same-context');
+    expect(sample.transportMs).toBe(100);
   });
 
-  // A combined page playing another machine's stream carries that machine's clock.
-  it('is still refused when the measured offset says another clock', () => {
-    const elsewhere = repeat(10, () =>
-      roundTrip({ rttMs: MAX_TRUSTED_UNCERTAINTY_MS * 3, offsetMs: 400 }));
-    const clock = describeClock(elsewhere, { sameContext: true });
-    expect(clock.state).toBe('untrusted');
-    expect(clock.exact).toBe(false);
+  // The reviewer's case: a stamping page playing another machine's stream whose clock is 20 ms
+  // ahead, over a path of 20 ms out and 60 ms back. The estimate lands on 0 by accident.
+  it('does not call a cross-machine clock exact because this page is also stamping', () => {
+    const t0 = 1_000_000;
+    const asymmetric = repeat(10, (i) => {
+      const start = t0 + i * 1_000;
+      const t1 = start + 20 + 20;
+      return { t0: start, t1, t2: t1, t3: start + 20 + 60 };
+    });
+    const frames = repeat(3, (i) => record({ sequence: i, own: false, rtpTimestamp: 90_000 + i }));
+    const sample = summarizeProbe(measuring({ frames, clockSamples: asymmetric }), 1_000);
+
+    expect(sample.clock.exact).toBe(false);
+    expect(sample.clock.mode).not.toBe('same-context');
+    expect(sample.clock.state).toBe('untrusted');
+    expect(sample.clock.uncertaintyMs).toBe(40 + TIMER_RESOLUTION_MS);
+    expect(sample.transportMs).toBe(null);
+  });
+
+  it('is not exact while even one frame in the window came from somewhere else', () => {
+    const frames = [
+      record({ sequence: 1, own: true }),
+      record({ sequence: 2, own: false, rtpTimestamp: 90_001 }),
+    ];
+    const sample = summarizeProbe(measuring({ frames, clockSamples: slowButZero }), 1_000);
+    expect(sample.clock.mode).not.toBe('same-context');
+  });
+});
+
+describe('recognizing this page\'s own frames', () => {
+  it('matches rung, sequence and send time, and nothing less', () => {
+    const sent = new Map();
+    recordSentStamp(sent, { rung: 1, sequence: 7, sentAt: 1_000 });
+    expect(isOwnFrame(sent, { rung: 1, sequence: 7, sentAt: 1_000 })).toBe(true);
+    expect(isOwnFrame(sent, { rung: 1, sequence: 7, sentAt: 1_001 })).toBe(false);
+    expect(isOwnFrame(sent, { rung: 0, sequence: 7, sentAt: 1_000 })).toBe(false);
+    expect(isOwnFrame(null, { rung: 1, sequence: 7, sentAt: 1_000 })).toBe(false);
+  });
+
+  it('remembers a bounded number of stamps, oldest out first', () => {
+    const sent = new Map();
+    for (let sequence = 0; sequence <= SENT_MEMORY; sequence += 1) {
+      recordSentStamp(sent, { rung: 0, sequence, sentAt: sequence });
+    }
+    expect(sent.size).toBe(SENT_MEMORY);
+    expect(isOwnFrame(sent, { rung: 0, sequence: 0, sentAt: 0 })).toBe(false);
+    expect(isOwnFrame(sent, { rung: 0, sequence: SENT_MEMORY, sentAt: SENT_MEMORY })).toBe(true);
   });
 });

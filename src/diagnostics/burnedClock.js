@@ -27,7 +27,10 @@ export const burnedClockUnavailableReason = () => {
 
 export const isBurnedClockAvailable = () => burnedClockUnavailableReason() === null;
 
-/** HH:MM:SS.mmm on a 24 hour clock, local time. */
+/**
+ * HH:MM:SS.mmm on a 24 hour clock, in this machine's local time. The publisher draws it, so the
+ * preview and the player show the same clock and the time zone never enters the difference.
+ */
 export const formatClock = (epochMs) => {
   const at = new Date(epochMs);
   const pad = (value, width) => String(value).padStart(width, '0');
@@ -86,6 +89,15 @@ export const burnClockIntoTrack = (sourceTrack, { now = Date.now } = {}) => {
 
   const transformer = new TransformStream({
     transform(frame, controller) {
+      /*
+       * Camera off: the source delivers black and the published track is disabled too (see
+       * TrackEnabledSync), so there is nothing to draw on and nobody to draw for. The frame
+       * passes on as it came, which keeps the track alive without the canvas work.
+       */
+      if (sourceTrack.enabled === false || generator.enabled === false) {
+        controller.enqueue(frame);
+        return;
+      }
       try {
         const width = frame.displayWidth;
         const height = frame.displayHeight;
