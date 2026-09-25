@@ -1707,7 +1707,8 @@ test.describe('regressions from real use', () => {
     const missed = await viewer.evaluate(() => {
       const rows = [...document.querySelectorAll('.wz-latency__table tr')];
       const row = rows.find((r) => /frames missed/i.test(r.textContent));
-      return row ? row.textContent.replace(/[^0-9]/g, '') : null;
+      // The value cell only: the row's note also carries a number, the last stamp seen.
+      return row ? row.querySelector('.wz-latency__value')?.textContent.trim() ?? null : null;
     });
     expect(missed, 'frames missed on a healthy simulcast session').toBe('0');
 
