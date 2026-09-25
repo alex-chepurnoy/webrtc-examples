@@ -57,18 +57,24 @@ export const videoWasRejected = (answerSdp) => {
  * @param {string} offeredCodec  what the client asked for, for the message
  * @param {boolean|null} browserOffersCodec  whether this browser can encode that codec at
  *        all; null when it could not be determined
+ * @param {boolean|null} preferenceApplied  whether the offer was actually narrowed to that
+ *        codec (see applyVideoCodecPreference); null when not known
  * @returns {string|null} a message when video was rejected, otherwise null
  *
  * The distinction in the message matters. "The server refused the codec I chose" and "my
  * browser cannot encode it, so the fallback offer went out and was refused too" are
  * different problems with different fixes, and naming the wrong one sends people to look
- * at the Engine when the answer is the browser they are sitting in front of.
+ * at the Engine when the answer is the browser they are sitting in front of. The same goes
+ * for a browser that can encode the codec but could not narrow the offer to it
+ * (setCodecPreferences missing or throwing): the full list went out, so the Engine refused
+ * everything, not the chosen codec, and Auto would change nothing.
  *
  * When the Engine did refuse, the fix is in its application config, not on this page: the
  * application only takes the codecs listed in PreferredCodecsVideo, and the refusal does
  * not say which those are. So the message names the setting.
  */
-export const describeRejectedVideo = (answerSdp, offeredCodec, browserOffersCodec = null) => {
+export const describeRejectedVideo = (answerSdp, offeredCodec, browserOffersCodec = null,
+  preferenceApplied = null) => {
   if (!videoWasRejected(answerSdp)) return null;
 
   const asked = offeredCodec && offeredCodec !== 'auto' ? offeredCodec : null;
@@ -78,6 +84,13 @@ export const describeRejectedVideo = (answerSdp, offeredCodec, browserOffersCode
       + `full codec list was offered instead, as with Auto, and the Engine application accepted `
       + `none of it. Check PreferredCodecsVideo in the application's Application.xml. Audio `
       + `is still being sent.`;
+  }
+
+  if (asked && preferenceApplied === false) {
+    return `No video is being sent: this browser could not restrict the offer to ${asked}, so `
+      + `the full codec list was offered instead, as with Auto, and the Engine application `
+      + `accepted none of it. Check PreferredCodecsVideo in the application's Application.xml. `
+      + `Audio is still being sent.`;
   }
 
   if (asked) {

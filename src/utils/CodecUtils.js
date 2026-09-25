@@ -110,3 +110,16 @@ export const isVideoCodecOfferable = (codec) => {
     return null;
   }
 };
+
+/**
+ * Whether this browser can narrow an offer to one codec at all.
+ *
+ * Choosing a codec only works through RTCRtpTransceiver.setCodecPreferences. Without it the
+ * full codec list goes out whatever the selector says, so the form says so up front rather
+ * than letting the choice look like it took. Returns null when there is no
+ * RTCRtpTransceiver to ask (no WebRTC here), which callers treat as "no reason to warn".
+ */
+export const canRestrictVideoCodecOffer = () => {
+  if (typeof RTCRtpTransceiver === 'undefined' || !RTCRtpTransceiver.prototype) return null;
+  return typeof RTCRtpTransceiver.prototype.setCodecPreferences === 'function';
+};
