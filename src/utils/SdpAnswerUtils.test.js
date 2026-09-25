@@ -24,6 +24,18 @@ describe('videoWasRejected', () => {
     expect(videoWasRejected(NO_VIDEO_SECTION)).toBe(true);
   });
 
+  // RFC 8843: the answerer zeroes the port on bundled m-lines that ride another's transport.
+  it('does not read a bundle-only port 0 as a rejection', () => {
+    expect(videoWasRejected(answer('m=video 0 UDP/TLS/RTP/SAVPF 96', 'a=bundle-only'))).toBe(false);
+    expect(describeRejectedVideo(answer('m=video 0 UDP/TLS/RTP/SAVPF 96', 'a=bundle-only'), 'H264'))
+      .toBeNull();
+  });
+
+  it('still flags a bundle-only line that is also inactive', () => {
+    const sdp = answer('m=video 0 UDP/TLS/RTP/SAVPF 96', ['a=bundle-only', 'a=inactive'].join('\r\n'));
+    expect(videoWasRejected(sdp)).toBe(true);
+  });
+
   it('is false for an accepted line or no sdp at all', () => {
     expect(videoWasRejected(ACCEPTED)).toBe(false);
     expect(videoWasRejected('')).toBe(false);

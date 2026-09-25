@@ -72,7 +72,8 @@ const handleRefusedDataChannels = (answerSdp, dataChannels, callbacks) => {
 
 // A server that will not accept any offered video codec answers m=video 0 / a=inactive.
 // The connection still succeeds on audio, so this has to be surfaced or it is invisible.
-const reportRejectedVideo = (answerSdp, publishSettings, callbacks, session) => {
+// Exported for its unit tests only.
+export const reportRejectedVideo = (answerSdp, publishSettings, callbacks, session) => {
   // Only meaningful when video was offered: an audio-only publish gets no video answer,
   // and that is not a rejection (carried over from ENG-5135).
   if (publishSettings.videoTrack == null) return;
