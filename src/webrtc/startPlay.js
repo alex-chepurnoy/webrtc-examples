@@ -1,6 +1,6 @@
 import stopPlay from './stopPlay';
 import { keepUntilStopped } from './sessionHandles';
-import { describeSignalingError, instrumentPeerConnection, instrumentWebSocket, isWebSocketClosing, logEvent, loggedFetch } from '../diagnostics/signalLog';
+import { describeSignalingError, instrumentPeerConnection, instrumentWebSocket, isWebSocketClosing, logEvent, loggedFetch, redactSecrets } from '../diagnostics/signalLog';
 import getSecureToken from './SecureToken';
 import { validateParams } from '../utils/ValidationUtils';
 import { addIceServers } from '../utils/IceServersUtils';
@@ -158,7 +158,7 @@ const websocketOnOpen = async (playSettings, websocket, callbacks, session) => {
         if (session.sessionId === '[empty]') {
           pendingCandidates.push(candidatePayload);
         } else {
-          console.log('Sending ICE candidate:', JSON.stringify(candidatePayload));
+          console.log('Sending ICE candidate:', JSON.stringify(redactSecrets(candidatePayload)));
           websocket.send(JSON.stringify(candidatePayload));
         }
       } else {
@@ -173,7 +173,7 @@ const websocketOnOpen = async (playSettings, websocket, callbacks, session) => {
         if (session.sessionId === '[empty]') {
           pendingCandidates.push(endOfCandidatesPayload);
         } else {
-          console.log('Sending end of candidates:', JSON.stringify(endOfCandidatesPayload));
+          console.log('Sending end of candidates:', JSON.stringify(redactSecrets(endOfCandidatesPayload)));
           websocket.send(JSON.stringify(endOfCandidatesPayload));
         }
       }
@@ -222,7 +222,7 @@ const websocketOnOpen = async (playSettings, websocket, callbacks, session) => {
 const websocketOnMessage = (event, playSettings, peerConnection, websocket, callbacks, session, pendingCandidates) => {
 
   let msgJSON = JSON.parse(event.data);
-  console.log(`Websocket Response: ${JSON.stringify(msgJSON)}`);
+  console.log(`Websocket Response: ${JSON.stringify(redactSecrets(msgJSON))}`);
 
   if (msgJSON.messageType?.toLowerCase() === "candidate") {
     peerConnection.addIceCandidate(new RTCIceCandidate({ candidate: msgJSON.candidate, sdpMLineIndex: 0 }));
@@ -259,7 +259,7 @@ const websocketOnMessage = (event, playSettings, peerConnection, websocket, call
 
         for (const candidate of pendingCandidates) {
           candidate.connectionId = session.sessionId;
-          console.log('Sending queued ICE candidate:', JSON.stringify(candidate));
+          console.log('Sending queued ICE candidate:', JSON.stringify(redactSecrets(candidate)));
           websocket.send(JSON.stringify(candidate));
         }
         pendingCandidates.length = 0;
@@ -326,7 +326,7 @@ const websocketSendPlayGetOffer = async (playSettings, websocket, peerConnection
     const offerPayload = createOfferPayload(playSettings, session, secureToken);
     offerPayload.sdp = peerConnection.localDescription.sdp;
 
-    console.log("sendPlayGetOffer: " + JSON.stringify(offerPayload));
+    console.log("sendPlayGetOffer: " + JSON.stringify(redactSecrets(offerPayload)));
     websocket.send(JSON.stringify(offerPayload));
 
     // An engine that doesn't understand the offer (see NegotiationFailureUtils) never replies, so

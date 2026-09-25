@@ -3,7 +3,7 @@
 import { addIceServers } from "../utils/IceServersUtils";
 import { applyVideoCodecPreference, isVideoCodecOfferable } from "../utils/CodecUtils";
 import { describeRejectedVideo, videoWasRejected } from "../utils/SdpAnswerUtils";
-import { describeSignalingError, instrumentPeerConnection, instrumentWebSocket, isWebSocketClosing, logEvent, loggedFetch } from "../diagnostics/signalLog";
+import { describeSignalingError, instrumentPeerConnection, instrumentWebSocket, isWebSocketClosing, logEvent, loggedFetch, redactSecrets } from "../diagnostics/signalLog";
 import { validateParams } from "../utils/ValidationUtils";
 import { isNoVideoSelection } from "../utils/VideoTrackUtils";
 import { keepUntilStopped, releaseSessionHandles } from "./sessionHandles";
@@ -238,7 +238,7 @@ const peerConnectionCreateOfferSuccess = (description, publishSettings, websocke
         streamName: streamInfo.streamName,
         connectionId: streamInfo.sessionId,
       };
-      console.log(`Sending ${payload.messageType}:`, JSON.stringify(payload));
+      console.log(`Sending ${payload.messageType}:`, JSON.stringify(redactSecrets(payload)));
       websocket.send(JSON.stringify(payload));
 
       // An engine that doesn't understand the offer (see NegotiationFailureUtils) never replies, so
@@ -298,7 +298,7 @@ const websocketOnOpen = (publishSettings, websocket, callbacks, session) => {
         if (session.sessionId === '[empty]') {
           pendingCandidates.push(candidatePayload);
         } else {
-          console.log('Sending ICE candidate:', JSON.stringify(candidatePayload));
+          console.log('Sending ICE candidate:', JSON.stringify(redactSecrets(candidatePayload)));
           websocket.send(JSON.stringify(candidatePayload));
         }
       } else {
@@ -314,7 +314,7 @@ const websocketOnOpen = (publishSettings, websocket, callbacks, session) => {
          if (session.sessionId === '[empty]') {
           pendingCandidates.push(endOfCandidatesPayload);
          } else {
-          console.log('Sending end of candidates:', JSON.stringify(endOfCandidatesPayload));
+          console.log('Sending end of candidates:', JSON.stringify(redactSecrets(endOfCandidatesPayload)));
           websocket.send(JSON.stringify(endOfCandidatesPayload));
          }
       }
@@ -404,7 +404,7 @@ const websocketOnMessage = (event, publishSettings, websocket, peerConnection, c
 
       for (const candidate of pendingCandidates) {
         candidate.connectionId = session.sessionId;
-        console.log('Sending queued ICE candidate:', JSON.stringify(candidate));
+        console.log('Sending queued ICE candidate:', JSON.stringify(redactSecrets(candidate)));
         websocket.send(JSON.stringify(candidate));
       }
       pendingCandidates.length = 0;

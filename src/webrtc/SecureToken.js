@@ -29,7 +29,6 @@ const getSecureToken = async (secureTokenData) => {
   if (!secureTokenData) {
     return null;
   }
-  console.log("Token data" + JSON.stringify(secureTokenData));
   if (secureTokenData.secret) {
     let prefix = secureTokenData.prefix;
     if(prefix === undefined || prefix === "") {
@@ -51,7 +50,6 @@ const getSecureToken = async (secureTokenData) => {
 	  }
     queryParams.sort();
     url = url + queryParams.join("&");
-	  console.log("URL to hash: " + url);
 	  let vDigest = await digestMessage(url);
 	  return { hash : vDigest, starttime : secureTokenData.startTime, endtime : secureTokenData.endTime }
   }
