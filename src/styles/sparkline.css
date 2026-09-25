@@ -43,9 +43,10 @@
   position: absolute;
   bottom: 22px;
   right: 0;
+  /* Dark in both themes, so the text is always white: --wz-text is dark in light mode. */
   background: var(--wz-navy-900);
   border: 1px solid var(--wz-border-strong);
-  color: var(--wz-text);
+  color: var(--wz-white);
   font-family: var(--wz-font-mono);
   font-size: 10px;
   padding: 1px 5px;
