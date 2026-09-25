@@ -29,7 +29,7 @@ const Play = () => {
 
   return (
     <>
-      <Stage title="Play" target={target}>
+      <Stage title="Play" target={target} dock={<DebugPanel />}>
         <div className="wz-stage__body" id="play-content">
           <div className="wz-stage__video">
             <div id="play-video-container">
@@ -51,7 +51,6 @@ const Play = () => {
           <StatsBar stats={stats} history={history} connectionState={connectionState} role="play" />
         </div>
 
-        <DebugPanel />
       </Stage>
 
       <Inspector tabs={tabs} legacyHref={ExternalLinks.legacyPlay} />

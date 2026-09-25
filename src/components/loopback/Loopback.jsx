@@ -57,7 +57,7 @@ const Loopback = () => {
       <CompositorUserMedia />
       <Devices />
 
-      <Stage title="Publish + Play">
+      <Stage title="Publish + Play" dock={<DebugPanel />}>
         <div className="wz-stage__body wz-loopback" id="loopback-content">
 
           <section className="wz-loopback__pane" aria-labelledby="loopback-publish-heading">
@@ -106,7 +106,6 @@ const Loopback = () => {
           capture, encode, Engine processing, decode or display time.
         </p>
 
-        <DebugPanel />
       </Stage>
 
       <Inspector

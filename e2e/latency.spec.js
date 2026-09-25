@@ -1775,3 +1775,53 @@ test.describe('regressions from real use', () => {
     await viewer.close();
   });
 });
+
+// Dragging the server communication log tall must make the stage scroll, never hide a panel.
+test.describe('a tall log', () => {
+  test('leaves the latency panel whole and reachable by scrolling', async ({ page }) => {
+    await requireEngine(page, test);
+    await page.setViewportSize({ width: 1600, height: 820 });
+    await page.addInitScript(() => window.localStorage.setItem('wz.debug.height', '600'));
+    await page.goto('/#/loopback');
+    await waitForCamera(page);
+
+    const streamName = uniqueStream('tallLog');
+    await openTab(page, 'Advanced');
+    await page.locator('#publishLatencyProbe').check();
+    await openTab(page, 'Connection');
+    await page.fill('#signalingURL', SIGNALING_URL);
+    await page.fill('#applicationName', APPLICATION);
+    await page.fill('#streamName', streamName);
+    await page.click('#publish-toggle');
+    await expectLive(page);
+
+    await page.getByRole('button', { name: 'Player', exact: true }).click();
+    await openTab(page, 'Advanced');
+    await page.locator('#playLatencyProbe').check();
+    await openTab(page, 'Connection');
+    await page.fill('#playSignalingURL', SIGNALING_URL);
+    await page.fill('#playApplicationName', APPLICATION);
+    await page.fill('#playStreamName', streamName);
+    await page.click('#play-toggle');
+    await expectPlaying(page);
+
+    const toggle = page.locator('.wz-debug__toggle');
+    if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
+
+    const panel = page.locator('.wz-latency');
+    await expect(panel).toBeVisible({ timeout: 20_000 });
+    await panel.scrollIntoViewIfNeeded();
+
+    const layout = await page.evaluate(() => {
+      const el = document.querySelector('.wz-latency');
+      const box = el.getBoundingClientRect();
+      const log = document.querySelector('.wz-debug').getBoundingClientRect();
+      // The panel clips its overflow, so a squeezed panel reads clientHeight < scrollHeight.
+      return { bottom: box.bottom, height: box.height, logTop: log.top,
+        client: el.clientHeight, content: el.scrollHeight };
+    });
+    expect(layout.height, 'the panel kept its height').toBeGreaterThan(60);
+    expect(layout.client, 'the panel shows all of its content').toBeGreaterThanOrEqual(layout.content);
+    expect(layout.bottom, 'scrolled into view above the log').toBeLessThanOrEqual(layout.logTop + 1);
+  });
+});

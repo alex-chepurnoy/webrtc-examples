@@ -5,9 +5,11 @@ import StatusBadges from './StatusBadges';
 
 /*
  * The center column shell: topbar, video area, stat strip, and docked content. `badges`
- * adds to LIVE and PLAYING at the right end of the topbar.
+ * adds to LIVE and PLAYING at the right end of the topbar. `dock` is the server communication
+ * log: everything else scrolls as one column above it, so dragging the log tall never hides a
+ * panel, it only makes the column scroll.
  */
-const Stage = ({ title, target, badges, children }) => (
+const Stage = ({ title, target, badges, dock, children }) => (
   <div className="wz-stage">
     <div className="wz-topbar">
       <span className="wz-topbar__title">{title}</span>
@@ -17,7 +19,8 @@ const Stage = ({ title, target, badges, children }) => (
       <StatusBadges />
     </div>
     <Errors />
-    {children}
+    <div className="wz-stage__scroll">{children}</div>
+    {dock}
   </div>
 );
 

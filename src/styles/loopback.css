@@ -5,6 +5,7 @@
 .wz-loopback__pane {
   flex: 1 1 0;
   min-width: 0;
+  /* Stretched by the stage; the picture takes the slack, the panels never give any up. */
   display: flex;
   flex-direction: column;
   gap: 9px;
@@ -42,6 +43,8 @@
 /* The strip is the last thing in a pane and sits at its foot, so the two panes agree on
    where the figures start however tall each picture is. */
 .wz-loopback__pane > .wz-statgroups { margin-top: auto; }
+
+.wz-loopback__pane > :not(.wz-loopback__video) { flex-shrink: 0; }
 
 /*
  * Each pane is about half the stage, so the tiles are wider here and wrap to more rows

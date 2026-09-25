@@ -164,13 +164,22 @@
 }
 
 /*
- * Scrolls when the log below is dragged tall, rather than spilling its figures and graphs over
- * the log. The picture keeps a floor, so a short stage scrolls instead of crushing it to a strip.
+ * Everything between the topbar and the log, as one column that scrolls when the log is
+ * dragged tall. Nothing in it shrinks below its content: the picture keeps a floor and every
+ * panel keeps its height, so a short stage scrolls instead of hiding or overlapping anything.
  */
-.wz-stage__body {
-  flex-grow: 1;
+.wz-stage__scroll {
+  flex: 1 1 0;
   min-height: 0;
   overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.wz-stage__scroll > * { flex-shrink: 0; }
+
+.wz-stage__body {
+  flex-grow: 1;
   padding: 16px 18px 12px;
   display: flex;
   gap: 14px;
@@ -179,7 +188,6 @@
 .wz-stage__video {
   flex-grow: 1;
   min-width: 0;
-  min-height: 180px;
   position: relative;
 }
 
@@ -516,6 +524,8 @@ body:has(.wz-resizer--dragging) { user-select: none; }
   .wz-app .wz-rail .wz-rail__rule { width: 1px; height: 24px; margin: 0 4px; }
 
   .wz-stage { flex: none; }
+
+  .wz-stage__scroll { flex: none; overflow-y: visible; }
 
   .wz-topbar { padding: 0 12px; gap: 10px; }
 

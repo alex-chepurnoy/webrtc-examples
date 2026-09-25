@@ -36,7 +36,7 @@ const Publish = () => {
       <CompositorUserMedia />
       <Devices />
 
-      <Stage title="Publish" target={target}>
+      <Stage title="Publish" target={target} dock={<DebugPanel />}>
         <div className="wz-stage__body" id="publish-content">
           <div className="wz-stage__video" id="publish-video-container">
             <PublishVideoElement />
@@ -60,7 +60,6 @@ const Publish = () => {
           </div>
         )}
 
-        <DebugPanel />
       </Stage>
 
       <Inspector tabs={tabs} legacyHref={ExternalLinks.legacyPublish} />

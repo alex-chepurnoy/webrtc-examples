@@ -115,7 +115,8 @@ ul.navbar-nav {
   align-items: center;
   justify-content: center;
   min-width: 0;
-  min-height: 0;
+  /* A floor, so a short stage scrolls (see .wz-stage__scroll) rather than losing the picture. */
+  min-height: 180px;
   position: relative;
 }
 
