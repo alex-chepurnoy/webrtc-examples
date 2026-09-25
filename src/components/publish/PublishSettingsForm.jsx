@@ -154,8 +154,9 @@ const PublishSettingsForm = ({ tab = 'connection' }) => {
 
     if (!constraints) return;
 
-    // Only send the keys this size actually constrains. "default" carries no width or
-    // height, and passing undefined for them would be a constraint of its own shape.
+    // Only send the keys this size actually constrains; passing undefined for a missing
+    // one would be a constraint of its own shape. "default" sends ideal 1280x720, which
+    // is also what a switch back to it needs to undo an explicit size.
     const newConstraints = {};
     if (constraints.width) newConstraints.width = constraints.width;
     if (constraints.height) newConstraints.height = constraints.height;
