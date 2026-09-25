@@ -123,4 +123,70 @@ describe('createStatsWatcher', () => {
     watch(sample({ estimatedLatencyMs: 610 }));       // a new session, not a spike
     expect(log).not.toHaveBeenCalled();
   });
+
+  /*
+   * The first sample never has a rate (there is no earlier report) and often has no round
+   * trip or latency yet. A null baseline used to stay the baseline, so nothing was ever said.
+   */
+  describe('starting from a sample with nothing in it', () => {
+    const empty = sample({ rttMs: null, estimatedLatencyMs: null, jitterBufferMs: null, outboundKbps: null });
+    const lines = (log, pattern) => log.mock.calls.map((c) => c[2]).filter((l) => pattern.test(l));
+
+    it('reports a round trip rising from 20 ms to 900 ms', () => {
+      const log = vi.fn();
+      const watch = createStatsWatcher('publish', log);
+      watch(empty);
+      watch(sample({ rttMs: 20 }));
+      watch(sample({ rttMs: 900 }));
+      expect(lines(log, /round trip/)).toEqual(['publish round trip 20 ms → 900 ms']);
+    });
+
+    it('reports a bitrate going 300 to 2500 to 100 kbps', () => {
+      const log = vi.fn();
+      const watch = createStatsWatcher('publish', log);
+      watch(empty);
+      watch(sample({ outboundKbps: 300 }));
+      watch(sample({ outboundKbps: 2500 }));
+      watch(sample({ outboundKbps: 100 }));
+      expect(lines(log, /bitrate/)).toEqual([
+        'publish bitrate 300 kbps → 2500 kbps',
+        'publish bitrate 2500 kbps → 100 kbps',
+      ]);
+    });
+
+    it('reports latency once the first figure has arrived', () => {
+      const log = vi.fn();
+      const watch = createStatsWatcher('play', log);
+      watch(empty);
+      watch(empty);
+      watch(sample({ estimatedLatencyMs: 40 }));
+      watch(sample({ estimatedLatencyMs: 610 }));
+      expect(lines(log, /latency/)).toHaveLength(1);
+      expect(lines(log, /latency/)[0]).toMatch(/40 ms → 610 ms/);
+    });
+
+    it('says nothing when the first figure arrives, since nothing changed', () => {
+      const log = vi.fn();
+      const watch = createStatsWatcher('publish', log);
+      watch(empty);
+      watch(sample());
+      expect(log).not.toHaveBeenCalled();
+    });
+
+    it('keeps its baseline through a sample that briefly lacks the figure', () => {
+      const log = vi.fn();
+      const watch = createStatsWatcher('publish', log);
+      watch(sample({ rttMs: 20 }));
+      watch(sample({ rttMs: null }));
+      watch(sample({ rttMs: 900 }));
+      expect(lines(log, /round trip/)).toEqual(['publish round trip 20 ms → 900 ms']);
+    });
+  });
+
+  it('does not call a rung whose state is not yet known a transition', () => {
+    const unknown = sample({ outboundLayers: [{ rid: 'h', sending: null }] });
+    const on = sample({ outboundLayers: [{ rid: 'h', sending: true }] });
+    expect(labels(unknown, on)).toEqual([]);
+    expect(labels(on, unknown)).toEqual([]);
+  });
 });
