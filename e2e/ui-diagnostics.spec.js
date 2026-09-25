@@ -253,34 +253,56 @@ test.describe('renditions over WHEP', () => {
 test.describe('simulcast layers', () => {
   test('every rung is listed, with what it is doing', async ({ browser }) => {
     const page = await browser.newPage();
-    await page.goto('/#/publish');
-    await requireEngine(page, test);
+    try {
+      await page.goto('/#/publish');
+      await requireEngine(page, test);
 
-    const streamName = uniqueStream('rungs');
-    await waitForCamera(page);
-    await openTab(page, 'Source');
-    await page.locator('#publishUseSimulcast').check();
-    await openTab(page, 'Connection');
-    await startPublishing(page, { streamName });
-    await expectLive(page);
+      const streamName = uniqueStream('rungs');
+      await waitForCamera(page);
+      await openTab(page, 'Source');
+      await page.locator('#publishUseSimulcast').check();
+      await openTab(page, 'Connection');
+      await startPublishing(page, { streamName });
+      await expectLive(page);
 
-    const table = page.locator('#simulcast-layers');
-    await expect(table).toBeVisible({ timeout: 20_000 });
+      const table = page.locator('#simulcast-layers');
+      await expect(table).toBeVisible({ timeout: 20_000 });
 
-    // One row per configured rendition, named by its rid.
-    for (const rid of ['h', 'm', 'l']) {
-      await expect(table.getByRole('rowheader', { name: rid, exact: true })).toBeVisible();
+      // One row per configured rendition, named by its rid.
+      for (const rid of ['h', 'm', 'l']) {
+        await expect(table.getByRole('rowheader', { name: rid, exact: true })).toBeVisible();
+      }
+
+      /*
+       * Each row's state has to agree with its own rate, read from the same render: a rung
+       * moving bytes says sending, one that is not says idle, and the summary counts the
+       * sending rows. A state taken from the session byte total said sending at 0 kbps.
+       */
+      await expect(async () => {
+        const read = await table.evaluate((el) => ({
+          rows: [...el.querySelectorAll('tbody tr')].map((tr) => ({
+            rate: tr.children[2].textContent.trim(),
+            state: tr.children[4].textContent.trim(),
+          })),
+          summary: el.querySelector('.wz-layers__summary').textContent,
+        }));
+        expect(read.rows).toHaveLength(3);
+        for (const { rate, state } of read.rows) {
+          const kbps = Number.parseFloat(rate);
+          if (state === 'sending') {
+            expect(kbps, `a sending rung reads ${rate}`).toBeGreaterThan(0);
+          } else {
+            expect(state).toMatch(/^idle/);
+            expect(Number.isNaN(kbps) || kbps === 0, `an idle rung reads ${rate}`).toBe(true);
+          }
+        }
+        const sending = read.rows.filter((r) => r.state === 'sending').length;
+        expect(sending).toBeGreaterThan(0);
+        expect(read.summary).toContain(`${sending} of 3 sending`);
+      }).toPass({ timeout: 10_000 });
+    } finally {
+      await page.close();
     }
-
-    // Each row says either that it is sending or why it is not; neither may be blank.
-    const states = await table.locator('tbody tr td:last-child').allTextContents();
-    expect(states).toHaveLength(3);
-    for (const state of states) {
-      expect(state.trim()).toMatch(/^(sending|idle)/);
-    }
-
-    await expect(table.locator('.wz-layers__summary')).toContainText(/of 3 sending/);
-    await page.close();
   });
 
   test('an ordinary publish shows no layer table at all', async ({ page }) => {
