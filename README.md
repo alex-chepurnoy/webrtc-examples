@@ -30,7 +30,7 @@ WebRTC is an open source project to enable real-time communication of audio, vid
 
 ### Prerequisites
 
-- [Node.js](https://nodejs.org/) v20.19 or later for the v2 React example
+- [Node.js](https://nodejs.org/) 22.22.2 or later on the 22 line, 24.15.0 or later on 24, or 26 and later. The test toolchain (Vitest, jsdom) needs these; `npm ci` warns on anything older
 - A running [Wowza Streaming Engine](https://www.wowza.com/docs/wowza-streaming-engine-product-articles) instance with WebRTC enabled
 
 ### Set up WebRTC
