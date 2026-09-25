@@ -38,9 +38,16 @@ test.describe('settings panel', () => {
     await openTab(page, 'Advanced');
     await page.locator('#playIsIp').check();
 
+    // Not while typing: "192.168.1.9" on the way to "192.168.1.99" is not a mistake yet.
     await page.fill('#playIp', '192.168.1.999');
+    await expect(page.locator('#playIp')).not.toHaveAttribute('aria-invalid', 'true');
+    await expect(page.locator('#playIp-error')).toHaveCount(0);
+
+    // On leaving the field, in place, and not as an interruption.
+    await page.locator('#playIp').blur();
     await expect(page.locator('#playIp')).toHaveAttribute('aria-invalid', 'true');
     await expect(page.locator('#playIp-error')).toBeVisible();
+    await expect(page.locator('#playIp-error')).not.toHaveAttribute('role', 'alert');
 
     // The primary action refuses it too.
     await openTab(page, 'Connection');
