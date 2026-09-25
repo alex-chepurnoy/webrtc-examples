@@ -856,6 +856,40 @@ test.describe('tab stability', () => {
 });
 
 
+test.describe('browser chrome color', () => {
+  // theme-color used to follow only the OS setting, so a reader who chose light on a dark OS
+  // got a dark browser bar over a light page.
+  test('theme-color follows the chosen theme, not the OS', async ({ page }) => {
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await page.goto('/#/publish');
+
+    const chrome = () => page.evaluate(() => {
+      const live = [...document.querySelectorAll('meta[name="theme-color"]')]
+        .filter((meta) => !meta.media || window.matchMedia(meta.media).matches);
+      return {
+        theme: document.documentElement.getAttribute('data-bs-theme'),
+        colors: live.map((meta) => meta.content.toLowerCase()),
+        ground: getComputedStyle(document.documentElement).getPropertyValue('--wz-bg').trim().toLowerCase(),
+      };
+    });
+
+    const before = await chrome();
+    expect(before.theme).toBe('dark');
+    expect(before.colors).toEqual([before.ground]);
+
+    await page.locator('#theme-toggle').click();
+    const after = await chrome();
+    expect(after.theme).toBe('light');
+    expect(after.colors, 'one theme-color, the light ground').toEqual([after.ground]);
+
+    // The inline script in index.html applies the remembered choice before the app mounts.
+    await page.reload();
+    const reloaded = await chrome();
+    expect(reloaded.theme).toBe('light');
+    expect(reloaded.colors).toEqual([reloaded.ground]);
+  });
+});
+
 test.describe('theme on first paint', () => {
   // The inline script in index.html sets the theme before the bundle mounts, so a
   // remembered choice never flashes the other theme.
