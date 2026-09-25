@@ -70,3 +70,15 @@
 @supports (width: 1cqw) {
   .wz-loopback__video { container-type: size; }
 }
+
+/* On a phone the two panes stack, each picture at the full width. The shell's own
+   small-screen layout, and the reason for the explicit ratio, is in shell.css. */
+@media (max-width: 767.98px) {
+  .wz-loopback__pane { flex: none; }
+
+  .wz-loopback__video {
+    flex: none;
+    width: 100%;
+    aspect-ratio: 16 / 9;
+  }
+}

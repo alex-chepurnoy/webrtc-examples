@@ -71,6 +71,85 @@ test.describe('settings panel', () => {
 });
 
 
+test.describe('small screens', () => {
+  // At 375px the desktop columns left the stage 14px wide, and the shell was clipped to the
+  // viewport, so the settings could not be scrolled to either.
+  for (const route of ['#/publish', '#/play', '#/loopback']) {
+    test(`a phone gets a usable stage and can scroll to the settings (${route})`, async ({ page }) => {
+      await page.setViewportSize({ width: 375, height: 812 });
+      await page.goto(`/${route}`);
+
+      const layout = await page.evaluate(() => {
+        const rect = (el) => el.getBoundingClientRect();
+        const videos = [...document.querySelectorAll('.wz-stage__video, .wz-loopback__video')].map(rect);
+        return {
+          videos: videos.map((r) => ({ width: r.width, height: r.height })),
+          rail: rect(document.querySelector('.wz-rail')),
+          docHeight: document.scrollingElement.scrollHeight,
+          docWidth: document.scrollingElement.scrollWidth,
+          viewport: { width: window.innerWidth, height: window.innerHeight },
+        };
+      });
+
+      expect(layout.videos.length).toBeGreaterThan(0);
+      for (const video of layout.videos) {
+        expect(video.width, 'the stage video is at least most of the screen wide').toBeGreaterThan(300);
+        expect(video.height, 'the stage video has a real height').toBeGreaterThanOrEqual(160);
+      }
+      // The rail is a bar across the top, not a column eating the width.
+      expect(layout.rail.width).toBe(layout.viewport.width);
+      expect(layout.rail.height).toBeLessThan(80);
+      expect(layout.docWidth, 'no sideways scroll').toBeLessThanOrEqual(layout.viewport.width);
+      expect(layout.docHeight, 'the page scrolls').toBeGreaterThan(layout.viewport.height);
+
+      // The settings are below the stage and reachable by scrolling the page.
+      const inspector = page.locator('.wz-inspector');
+      await inspector.scrollIntoViewIfNeeded();
+      await expect(inspector).toBeInViewport();
+      const box = await inspector.boundingBox();
+      expect(box.width).toBeGreaterThanOrEqual(layout.viewport.width - 1);
+      expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
+      await expect(page.locator('.wz-tabs [role="tab"]').first()).toBeVisible();
+
+      // The rail stays on screen while the page is scrolled.
+      await expect(page.locator('.wz-rail')).toBeInViewport();
+    });
+  }
+
+  test('the desktop layout is unchanged at 768px and up', async ({ page }) => {
+    await page.setViewportSize({ width: 1024, height: 768 });
+    await page.goto('/#/publish');
+    const layout = await page.evaluate(() => ({
+      rail: document.querySelector('.wz-rail').getBoundingClientRect().width,
+      app: document.querySelector('.wz-app').getBoundingClientRect().height,
+      docHeight: document.scrollingElement.scrollHeight,
+    }));
+    expect(layout.rail).toBe(60);
+    expect(layout.app).toBe(768);
+    expect(layout.docHeight).toBe(768);
+  });
+
+  test('the dark theme holds on a phone', async ({ page }) => {
+    await page.setViewportSize({ width: 375, height: 812 });
+    await page.goto('/#/publish');
+    await page.evaluate(() => document.documentElement.setAttribute('data-bs-theme', 'dark'));
+    const colors = await page.evaluate(() => ({
+      rail: getComputedStyle(document.querySelector('.wz-rail')).backgroundColor,
+      inspector: getComputedStyle(document.querySelector('.wz-inspector')).backgroundColor,
+      surface: (() => {
+        const probe = document.createElement('span');
+        probe.style.color = getComputedStyle(document.documentElement).getPropertyValue('--wz-surface');
+        document.body.appendChild(probe);
+        const out = getComputedStyle(probe).color;
+        probe.remove();
+        return out;
+      })(),
+    }));
+    expect(colors.rail).toBe(colors.surface);
+    expect(colors.inspector).toBe(colors.surface);
+  });
+});
+
 test.describe('shell alignment', () => {
   // The topbar rule and the tab-strip rule read as one line, so they share a pixel.
   test('the topbar rule and the tab rule share a line', async ({ page }) => {

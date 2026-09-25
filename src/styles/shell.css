@@ -9,6 +9,9 @@
 .wz-app {
   display: flex;
   height: 100vh;
+  /* The visible viewport where supported, so a tablet's browser toolbar cannot sit over the
+     foot of the shell. On a desktop browser the two are the same height. */
+  height: 100dvh;
   overflow: hidden;
   /* Split rather than a shorthand, so the gradient is a layer over the flat colour and a
      theme with no wash falls back to the colour alone. See --wz-bg-wash in tokens.css. */
@@ -442,4 +445,111 @@ body:has(.wz-resizer--dragging) { user-select: none; }
   justify-content: center;
   color: var(--wz-text-subtle);
   font-size: 13px;
+}
+
+/* ------------------------------------------------------------------ small screens */
+
+/*
+ * Below Bootstrap's md breakpoint the three columns do not fit. A 60px rail beside an
+ * inspector that will not go under 280px left a phone's stage 14px wide, and with the shell
+ * clipped to the viewport nothing below it could be scrolled to.
+ *
+ * So the shell stacks and the page scrolls: the rail becomes a bar across the top that stays
+ * put, the stage follows at full width with a 16:9 picture, and the inspector comes after it.
+ * The panel resize handle goes, since there is no second column to trade width with. Nothing
+ * here applies at 768px and up, so the desktop layout is untouched.
+ */
+@media (max-width: 767.98px) {
+  .wz-app {
+    flex-direction: column;
+    height: auto;
+    min-height: 100vh;
+    min-height: 100dvh;
+    overflow: visible;
+  }
+
+  /* The rail, as a top bar. Icons only; there is no room for the labels, so the expand
+     control goes too, and a rail left open at a wider size draws the same way. */
+  .wz-rail,
+  .wz-rail--open {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    width: 100%;
+    height: 52px;
+    flex-direction: row;
+    align-items: center;
+    padding: 0 10px;
+    border-right: 0;
+    border-bottom: 1px solid var(--wz-border);
+  }
+
+  .wz-app .wz-rail .wz-rail__brand { margin: 0 8px 0 0; padding: 0; }
+  .wz-app .wz-rail .wz-rail__logo { height: 18px; }
+
+  /* 36px wide so all seven controls fit a 320px screen. The extra .wz-app outweighs the
+     collapsed-rail rules above, which are three classes deep. */
+  .wz-app .wz-rail .wz-rail__link {
+    width: 36px;
+    height: 40px;
+    flex-shrink: 0;
+    margin: 0;
+    padding: 0;
+    justify-content: center;
+    align-self: center;
+    border-left: 0;
+    border-bottom: 2px solid transparent;
+  }
+
+  .wz-app .wz-rail .wz-rail__link--active { border-bottom-color: var(--wz-accent); }
+
+  .wz-app .wz-rail .wz-rail__label,
+  .wz-app .wz-rail .wz-rail__toggle { display: none; }
+
+  .wz-app .wz-rail .wz-rail__rule { width: 1px; height: 24px; margin: 0 4px; }
+
+  .wz-stage { flex: none; }
+
+  .wz-topbar { padding: 0 12px; gap: 10px; }
+
+  .wz-topbar__target {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .wz-stage__body {
+    flex: none;
+    flex-direction: column;
+    padding: 12px;
+  }
+
+  /* The video area is a size container, so it takes no height from its contents: without
+     one of its own it would collapse. The width sets it instead. */
+  .wz-stage__video {
+    flex: none;
+    width: 100%;
+    aspect-ratio: 16 / 9;
+  }
+
+  .wz-stage__aside { width: auto; }
+
+  .wz-stage__stats { margin: 0 12px 12px; }
+  .wz-stage__note { margin: 0 12px 10px; }
+
+  .wz-resizer--x { display: none; }
+
+  /* !important because the resize hook writes the saved width inline. */
+  .wz-inspector {
+    width: auto !important;
+    flex: none;
+    border-left: 0;
+    border-top: 1px solid var(--wz-border);
+  }
+
+  /* The page scrolls now, not the panel body, so the primary action docks to the foot of the
+     screen rather than of a scroll box that no longer exists. */
+  .wz-inspector__body { overflow-y: visible; }
+  .wz-inspector .wz-actions-dock { bottom: 0; }
 }
