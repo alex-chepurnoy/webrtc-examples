@@ -548,3 +548,54 @@ test.describe('stopping cleanly', () => {
   });
 });
 
+
+// A trend line is drawn whole, at its one size, or not at all: never squeezed into an oval
+// and never spilling into the tile beside it.
+test.describe('trend lines and space', () => {
+  const measure = (page) => page.evaluate(() =>
+    [...document.querySelectorAll('.wz-spark')].map((spark) => {
+      const box = spark.getBoundingClientRect();
+      const cell = spark.closest('.wz-stat, .wz-latency__table th').getBoundingClientRect();
+      return { width: Math.round(box.width), inside: box.left >= cell.left - 0.5 && box.right <= cell.right + 0.5 };
+    }));
+
+  test('shows every line whole when there is room, and drops the ones that do not fit', async ({ page }) => {
+    await requireEngine(page, test);
+    await page.setViewportSize({ width: 1900, height: 900 });
+    await page.goto('/#/loopback');
+    const streamName = uniqueStream('sparkfit');
+    await startPublishing(page, { streamName });
+    await expectLive(page);
+    await page.getByRole('button', { name: 'Player', exact: true }).click();
+    await startPlaying(page, { streamName });
+    await expectPlaying(page);
+
+    // Every tile's history needs two samples; wait until the count stops growing.
+    let settled = -1;
+    await expect.poll(async () => {
+      const count = (await measure(page)).length;
+      const steady = count > 4 && count === settled;
+      settled = count;
+      return steady;
+    }, { timeout: 30_000, intervals: [2000] }).toBe(true);
+    const wide = await measure(page);
+    expect(wide.every((s) => s.width === 62 && s.inside), JSON.stringify(wide)).toBe(true);
+
+    // Narrower stages: whatever is drawn is whole and inside its cell, and somewhere on the
+    // way some lines give way rather than squeeze. (At the narrowest the tiles wrap to more
+    // rows and widen again, so the count is not monotonic.)
+    const counts = [];
+    for (const width of [1400, 1100, 900]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.waitForTimeout(500);
+      const at = await measure(page);
+      expect(at.every((s) => s.width === 62 && s.inside), `${width}px: ${JSON.stringify(at)}`).toBe(true);
+      counts.push(at.length);
+    }
+    expect(Math.min(...counts), `lines drawn at 1400/1100/900: ${counts}`).toBeLessThan(wide.length);
+
+    // And they come back when the room does.
+    await page.setViewportSize({ width: 1900, height: 900 });
+    await expect.poll(async () => (await measure(page)).length).toBe(wide.length);
+  });
+});

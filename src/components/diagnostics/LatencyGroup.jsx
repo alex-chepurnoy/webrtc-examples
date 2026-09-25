@@ -169,20 +169,20 @@ const Shell = ({ summary, summaryTone, children }) => (
 const Row = ({ label, note, value, muted, history }) => (
   <tr className={muted ? 'wz-latency__row--muted' : undefined}>
     <th scope="row">
-      {label}
-      {note ? <span className="wz-latency__note">{note}</span> : null}
-    </th>
-    <td className="wz-latency__value">
-      {/* The shape sits to the left of the number, so the number stays right-aligned where
-          the eye already knows it. Under two points there is nothing to draw, and nothing
-          is drawn: a young session looks exactly as it did before this feature. */}
-      <span className="wz-latency__reading">
+      {/* The shape sits at the right of the label cell, just left of the right-aligned
+          number, in whatever width the label leaves; with too little it is not drawn. Under
+          two points there is nothing to draw, and nothing is drawn. */}
+      <div className="wz-latency__label-row">
+        <span className="wz-latency__label">
+          {label}
+          {note ? <span className="wz-latency__note">{note}</span> : null}
+        </span>
         {history && history.length >= 2 ? (
           <Sparkline points={history} format={msFormat} ariaLabel={label + ' history'} />
         ) : null}
-        <span>{value}</span>
-      </span>
-    </td>
+      </div>
+    </th>
+    <td className="wz-latency__value">{value}</td>
   </tr>
 );
 

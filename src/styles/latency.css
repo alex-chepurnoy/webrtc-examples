@@ -56,14 +56,15 @@
   color: var(--wz-text-subtle);
 }
 
-/* Graph to the left, number to the right: the number keeps its place and its alignment,
-   and the shape reads as context on the way to it. */
-.wz-latency__reading {
-  display: inline-flex;
+/* The label keeps its words; the graph takes what is left of the cell, right-aligned beside
+   the number, so the number keeps its place and the shape reads as context on the way to it. */
+.wz-latency__label-row {
+  display: flex;
   align-items: center;
-  justify-content: flex-end;
   gap: 8px;
 }
+
+.wz-latency__label { flex: 0 1 auto; min-width: 0; }
 
 .wz-latency__value {
   padding: 5px 12px;

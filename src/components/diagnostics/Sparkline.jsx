@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 /*
  * Single-series trend line for a stat tile: no legend or axes, and only the current point
@@ -15,7 +15,37 @@ const PAD = 2;
 
 const isFigure = (value) => typeof value === 'number' && Number.isFinite(value);
 
-const Sparkline = ({ points, times, format, ariaLabel, windowMs = 60_000 }) => {
+/*
+ * Whether the slot has room for the whole line. The slot takes whatever space its row leaves
+ * over, and the line is drawn at its one size or not at all: squeezed, it distorted (the dot
+ * became an oval) and then spilled into the tile beside it. Without ResizeObserver there is
+ * no way to know, so the line is shown, as it always was.
+ */
+const useFits = (width) => {
+  const ref = useRef(null);
+  const [fits, setFits] = useState(true);
+  useLayoutEffect(() => {
+    const slot = ref.current;
+    if (!slot || typeof ResizeObserver === 'undefined') return undefined;
+    const check = () => setFits(slot.clientWidth >= width);
+    check();
+    const observer = new ResizeObserver(check);
+    observer.observe(slot);
+    return () => observer.disconnect();
+  }, [width]);
+  return [ref, fits];
+};
+
+const Sparkline = (props) => {
+  const [slotRef, fits] = useFits(WIDTH);
+  return (
+    <div className="wz-spark-slot" ref={slotRef}>
+      {fits ? <SparklineDrawing {...props} /> : null}
+    </div>
+  );
+};
+
+const SparklineDrawing = ({ points, times, format, ariaLabel, windowMs = 60_000 }) => {
   const [hover, setHover] = useState(null);
 
   const geometry = useMemo(() => {
