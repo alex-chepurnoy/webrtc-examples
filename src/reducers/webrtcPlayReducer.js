@@ -5,6 +5,9 @@ const initialState = {
   peerConnection: undefined,
   audioTrack: undefined,
   videoTrack: undefined,
+  // The received MediaStream. Held here rather than in the player so a player that mounts
+  // mid-session (back to Play, or over to the combined page) shows the session in progress.
+  stream: undefined,
   connected: false
 }
 
@@ -18,6 +21,8 @@ const webrtcPlayReducer = (state = initialState, action) => {
       return { ...state, audioTrack: action.audioTrack };
     case WebRTCPlayActions.SET_WEBRTC_PLAY_VIDEO_TRACK:
       return { ...state, videoTrack: action.videoTrack };
+    case WebRTCPlayActions.SET_WEBRTC_PLAY_STREAM:
+      return { ...state, stream: action.stream };
     case WebRTCPlayActions.SET_WEBRTC_PLAY_CONNECTED:
       return { ...state, connected:action.connected };
     default:

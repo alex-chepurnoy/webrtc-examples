@@ -15,7 +15,6 @@ import stopPlay from '../../webrtc/stopPlay';
 const Player = () => {
 
   const videoElement = useRef(null);
-  const streamRef = useRef(new MediaStream());
   const maxWidthRef = useRef(0);
   const peerConnectionRef = useRef(undefined);
   const websocketRef = useRef(undefined);
@@ -23,7 +22,7 @@ const Player = () => {
 
   const dispatch = useDispatch();
   const playSettings = useSelector ((state) => state.playSettings);
-  const { peerConnection, websocket, connected } = useSelector ((state) => state.webrtcPlay);
+  const { peerConnection, websocket, connected, stream } = useSelector ((state) => state.webrtcPlay);
 
   // Listen for changes in the play* flags in the playSettings store
   // and stop or stop playback accordingly
@@ -40,10 +39,8 @@ const Player = () => {
         dispatch({type:WebRTCPlayActions.SET_WEBRTC_PLAY_WEBSOCKET,websocket:result.websocket});
       },
       onPlayStopped: () => {
-        streamRef.current = new MediaStream();
-        if (videoElement.current) {
-          videoElement.current.srcObject = null;
-        }
+        // Clearing the stream detaches it from whichever player is mounted (see below).
+        dispatch({type:WebRTCPlayActions.SET_WEBRTC_PLAY_STREAM,stream:undefined});
         dispatch({type:WebRTCPlayActions.SET_WEBRTC_PLAY_CONNECTED,connected:false});
         dispatch(DataChannelActions.resetDataChannel('play'));
       }
@@ -52,6 +49,8 @@ const Player = () => {
     if (playSettings.playStart && !playSettings.playStarting && !connected)
     {
       dispatch({type:PlaySettingsActions.SET_PLAY_FLAGS, playStart:false, playStarting:true});
+      // One stream per session, published to the store on its first track.
+      const sessionStream = new MediaStream();
       startPlay(playSettings, {
         onError: (error) => {
           dispatch({type:ErrorsActions.SET_ERROR_MESSAGE,message:error.message});
@@ -65,13 +64,12 @@ const Player = () => {
         onSetWebsocket: stopCallbacks.onSetWebsocket,
         onPeerConnectionOnTrack: (event) => {
           console.log('ontrack:', event.track.kind, 'muted:', event.track.muted, 'readyState:', event.track.readyState);
-          streamRef.current.addTrack(event.track);
-          // Attach once. Reassigning on every track reloads the element after the Play
-          // click's gesture has expired, which leaves Safari with audio and no picture.
-          if (videoElement.current && videoElement.current.srcObject !== streamRef.current) {
-            videoElement.current.srcObject = streamRef.current;
-            console.log('srcObject set, tracks:', streamRef.current.getTracks().map(t => t.kind));
-          }
+          const first = sessionStream.getTracks().length === 0;
+          sessionStream.addTrack(event.track);
+          // Published once. The element is attached when the stream identity changes, and
+          // reassigning on every track reloads the element after the Play click's gesture has
+          // expired, which leaves Safari with audio and no picture.
+          if (first) dispatch({type:WebRTCPlayActions.SET_WEBRTC_PLAY_STREAM,stream:sessionStream});
         },
         onSetDataChannel: (result) => {
           // Only the chat channel is sent on from the UI; the captions handle is receive-only.
@@ -153,46 +151,77 @@ const Player = () => {
 
   /*
    * Sound starts on: the Play click unmutes the element while it is still a user gesture. If
-   * the browser refuses sound anyway, playback would stop with no picture, so the first
-   * metadata retries silent and offers "Click to unmute". The toggle below keeps sound
-   * controllable whenever there is a picture.
+   * the browser refuses sound anyway (NotAllowedError), playback would stop with no picture,
+   * so the first metadata retries silent and offers "Click to unmute". The toggle below keeps
+   * sound controllable whenever media is flowing, picture or not.
+   *
+   * The gesture and playing flags name the stream they were raised for, so they end with the
+   * session that raised them: a stop or a new session clears them without an effect to reset
+   * them, and "Click to unmute" cannot come back when sound is later muted from the controls.
    */
   const [muted, setMuted] = useState(false);
-  const [needsGesture, setNeedsGesture] = useState(false);
+  const [needsGestureFor, setNeedsGestureFor] = useState(null);
+  const [playingFor, setPlayingFor] = useState(null);
 
   useEffect(() => {
     const video = videoElement.current;
     if (!video) return undefined;
     const sync = () => setMuted(video.muted);
+    const onPlaying = () => setPlayingFor(video.srcObject);
     const ensurePlaying = async () => {
       if (!video.paused) return;
       try {
         await video.play();
-      } catch {
+      } catch (error) {
+        // Only a refusal of sound is helped by muting. An AbortError is a load interrupted by a
+        // new source or a stop mid-start, and is not a reason to take the sound away.
+        if (error?.name !== 'NotAllowedError') return;
         video.muted = true;
+        sync();
         try { await video.play(); } catch { /* nothing more to try without a gesture */ }
-        setNeedsGesture(true);
+        setNeedsGestureFor(video.srcObject);
       }
     };
     video.addEventListener('volumechange', sync);
+    video.addEventListener('playing', onPlaying);
     video.addEventListener('loadedmetadata', ensurePlaying);
     return () => {
       video.removeEventListener('volumechange', sync);
+      video.removeEventListener('playing', onPlaying);
       video.removeEventListener('loadedmetadata', ensurePlaying);
     };
   }, []);
+
+  /*
+   * The session's stream goes onto whichever element is mounted, so leaving Play and coming
+   * back finds the session still showing instead of "Not playing" beside a Stop button. Only
+   * on a change of stream: reassigning the same one reloads the element (see the ontrack
+   * note above).
+   */
+  useEffect(() => {
+    const video = videoElement.current;
+    if (!video) return undefined;
+    if (video.srcObject !== (stream ?? null)) video.srcObject = stream ?? null;
+    return () => { video.srcObject = null; };
+  }, [stream]);
 
   const setSound = useCallback((on) => {
     const video = videoElement.current;
     if (!video) return;
     video.muted = !on;
+    setMuted(!on);
     if (on) video.play().catch(() => {});
-    setNeedsGesture(false);
+    setNeedsGestureFor(null);
   }, []);
 
+  const live = connected && stream != null;
+  const needsGesture = live && needsGestureFor === stream;
   // No picture until both dimensions are known. The video is never display:none (WebKit may
   // not paint a video that started playing hidden); the placeholder covers it until then.
   const hasPicture = connected && videoSize.width > 0 && videoSize.height > 0;
+  // Media flowing with no picture: an audio-only stream. The element and its controls are
+  // left uncovered, since there is nothing for a placeholder to stand in for.
+  const flowing = live && (hasPicture || playingFor === stream);
 
   /*
    * The probe's decode-and-display leg is measured from this element, because
@@ -211,9 +240,9 @@ const Player = () => {
 
   return (
   <>
-    {!hasPicture && (
+    {!flowing && (
       <div className="wz-video-placeholder wz-video-placeholder--over">
-        Not playing
+        {connected ? 'Waiting for media' : 'Not playing'}
       </div>
     )}
     <video
@@ -224,7 +253,9 @@ const Player = () => {
       controls
       style={hasPicture ? { '--wz-video-ar': videoSize.width / videoSize.height } : undefined}
     />
-    {hasPicture && needsGesture && muted && (
+    {/* Not gated on media flowing: a refusal can leave the element paused, and this button
+        is then the only way to start it. */}
+    {needsGesture && muted && (
       <button
         type="button"
         id="player-unmute"
@@ -234,20 +265,20 @@ const Player = () => {
         Click to unmute
       </button>
     )}
-    {hasPicture && (
+    {/* The label is the action, so it carries no pressed state as well. */}
+    {flowing && (
       <button
         type="button"
         id="player-mute-toggle"
         className="wz-mute-toggle"
-        aria-pressed={muted}
         onClick={() => setSound(muted)}
       >
         {muted ? 'Unmute' : 'Mute'}
       </button>
     )}
-    {hasPicture && (
+    {flowing && (
       <div id="rendition-badge">
-        {videoSize.width}&times;{videoSize.height}
+        {hasPicture ? <>{videoSize.width}&times;{videoSize.height}</> : 'Audio only'}
       </div>
     )}
   </>

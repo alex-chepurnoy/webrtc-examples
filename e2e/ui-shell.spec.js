@@ -164,14 +164,19 @@ test.describe('video overlays', () => {
       });
       expect(within).toBe(true);
 
-      // Sound is controllable whenever there is a picture.
+      // Sound starts on (the Play click unmutes inside the gesture), and stays controllable.
       const toggle = viewer.locator('#player-mute-toggle');
       await expect(toggle).toBeVisible();
-      const before = await viewer.evaluate(() => document.querySelector('#player-video').muted);
+      const muted = () => viewer.evaluate(() => document.querySelector('#player-video').muted);
+      expect(await muted()).toBe(false);
+      await expect(toggle).toHaveText('Mute');
+      await expect(viewer.locator('#player-unmute')).toHaveCount(0);
+
       await toggle.click();
-      await expect.poll(() => viewer.evaluate(() => document.querySelector('#player-video').muted))
-        .toBe(!before);
-      await expect(toggle).toHaveAttribute('aria-pressed', String(!before));
+      await expect.poll(muted).toBe(true);
+      // The label says the action; a pressed state as well would read "Unmute, pressed".
+      await expect(toggle).toHaveText('Unmute');
+      await expect(toggle).not.toHaveAttribute('aria-pressed');
 
       await publisher.close();
       await viewer.close();
