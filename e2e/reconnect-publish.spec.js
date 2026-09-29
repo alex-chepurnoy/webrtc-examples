@@ -97,6 +97,25 @@ test.describe('publish reconnect over wss', () => {
     expect(relay.counts.CLOSE || 0).toBeGreaterThanOrEqual(1);
   });
 
+  test('rolls a restart answered 425 back, so ICE can be restarted again', async ({ page }) => {
+    const relay = await relaySessions(page);
+    await page.goto('/#/publish');
+    await requireEngine(page, test);
+    await goLive(page, uniqueStream('e2eRe425'));
+
+    relay.busyIceRestarts = 1;
+    await openTab(page, 'Advanced');
+    await page.locator('#ice-restart-toggle').click();
+    await expectRow(page, 'warn', 'publish status 425 to ICE_RESTART: the Engine is still restarting ICE, asking again in 2 s (retry 1 of 3)');
+
+    // Left in have-local-offer, the connection could never raise another restart offer.
+    await page.locator('#ice-restart-toggle').click();
+    await expect.poll(() => relay.counts.ICE_RESTART || 0).toBe(2);
+    await expect(page.locator('#video-live-indicator-live')).toBeVisible();
+    await expect(panelRow(page, 'warn', 'publish session lost')).toHaveCount(0);
+    expect(relay.counts.OFFER).toBe(1);
+  });
+
   test('notices an application restart through the liveness check, and republishes', async ({ page }) => {
     await useTimings(page, { probeGraceMs: 2000, probeIntervalMs: 3000, probeRecheckMs: 1000 });
     const relay = await relaySessions(page);
@@ -139,7 +158,8 @@ test.describe('publish reconnect over wss', () => {
   });
 
   test('stops during a reconnect', async ({ page }) => {
-    await useTimings(page, SLOW_FIRST_RETRY);
+    // Short limits, so a republish that survived Stop would show itself within a second or two.
+    await useTimings(page, { delaysMs: [2000, 300], connectTimeoutMs: 1500 });
     // Routes go in before the page loads; one added later missed the page's sockets.
     const relay = await relaySessions(page);
     await page.goto('/#/publish');
@@ -151,17 +171,28 @@ test.describe('publish reconnect over wss', () => {
     await relay.closeFromServer(1001, 'going away');
     await expect(page.locator(RECONNECTING)).toBeVisible();
     await expectRow(page, 'info', 'publish republish attempt 1: new peer connection and signaling');
+    const held = relay.sockets[relay.sockets.length - 1];
 
     await page.locator('#publish-toggle').click();
     await expect(page.locator(RECONNECTING)).toHaveCount(0);
     await expect(page.locator('#publish-toggle')).toHaveText('Publish');
     await expectRow(page, 'info', 'publish recovery canceled by Stop during attempt 1 of 6');
-
-    const offers = relay.counts.OFFER;
-    await page.waitForTimeout(5000);
-    expect(relay.counts.OFFER).toBe(offers);
+    // Stop closed the attempt it canceled.
+    await expect.poll(() => held.closed).toBe(true);
     await expect(page.locator('#video-live-indicator-live')).toHaveCount(0);
     await expect(page.locator('#error-panel')).toHaveCount(0);
+
+    // Publish again. A supervisor still running would ignore the click, and a republish still
+    // scheduled would add a socket of its own, so exactly one new socket and LIVE says Stop
+    // ended the old session completely.
+    relay.hold = false;
+    const sockets = relay.sockets.length;
+    const offers = relay.counts.OFFER;
+    await page.locator('#publish-toggle').click();
+    await expectLive(page);
+    expect(relay.sockets.length).toBe(sockets + 1);
+    expect(relay.counts.OFFER).toBe(offers + 1);
+    await expect(panelRow(page, 'warn', 'publish republish attempt 1 failed')).toHaveCount(0);
   });
 
   test('a healthy minute of publishing never republishes', async ({ page }) => {

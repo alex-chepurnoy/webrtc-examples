@@ -90,7 +90,7 @@ test.describe('play reconnect over wss', () => {
     // own cadence instead of spending attempts on it.
     await expectRow(viewer, 'warn', `play waiting for stream "${streamName}" to come back (`);
     await viewer.waitForTimeout(8000);
-    await expect(viewer.locator(RECONNECTING)).toHaveText('Reconnecting 1/6');
+    await expect(viewer.locator(RECONNECTING)).toHaveText('Waiting for stream');
     await publisher.locator('#publish-toggle').click();
     await expectLive(publisher);
 
@@ -105,7 +105,8 @@ test.describe('play reconnect over wss', () => {
   test('stops during a reconnect', async ({ browser }) => {
     const { publisher, streamName } = await publishStream(browser, 'e2eRePlayStop', test);
     const viewer = await browser.newPage();
-    await useTimings(viewer, SLOW_FIRST_RETRY);
+    // Short limits, so a replay that survived Stop would show itself within a second or two.
+    await useTimings(viewer, { delaysMs: [2000, 300], connectTimeoutMs: 1500 });
     const relay = await relaySessions(viewer);
     await viewer.goto('/#/play');
     await playUntilDecoding(viewer, streamName);
@@ -114,16 +115,22 @@ test.describe('play reconnect over wss', () => {
     await relay.closeFromServer(1001, 'going away');
     await expect(viewer.locator(RECONNECTING)).toBeVisible();
     await expectRow(viewer, 'info', 'play reconnect attempt 1: new peer connection and signaling');
+    const held = relay.sockets[relay.sockets.length - 1];
 
     await viewer.locator('#play-toggle').click();
     await expect(viewer.locator(RECONNECTING)).toHaveCount(0);
     await expect(viewer.locator('#play-toggle')).toHaveText('Play');
     await expectRow(viewer, 'info', 'play recovery canceled by Stop during attempt 1 of 6');
-
-    const offers = relay.counts.OFFER;
-    await viewer.waitForTimeout(5000);
-    expect(relay.counts.OFFER).toBe(offers);
+    await expect.poll(() => held.closed).toBe(true);
     await expect(viewer.locator('#video-play-indicator')).toHaveCount(0);
+
+    // Play again: exactly one new socket and PLAYING says Stop ended the old session completely.
+    relay.hold = false;
+    const sockets = relay.sockets.length;
+    await viewer.locator('#play-toggle').click();
+    await expectPlaying(viewer);
+    expect(relay.sockets.length).toBe(sockets + 1);
+    await expect(panelRow(viewer, 'warn', 'play reconnect attempt 1 failed')).toHaveCount(0);
 
     await viewer.close();
     await publisher.close();

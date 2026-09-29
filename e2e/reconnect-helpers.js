@@ -20,7 +20,9 @@ export const useTimings = (page, timings) =>
  * Relays every session socket to the Engine and records what goes through. Returns controls:
  *   closeFromServer(code, reason)  close the newest socket as a server would
  *   dropIceRestart                 when true, ICE_RESTART frames never reach the Engine
+ *   busyIceRestarts                that many ICE_RESTART frames are answered 425 here instead
  *   hold                           when true, new sockets open but are never answered
+ *   sockets[i].closed              the page has closed that socket
  *   counts                         frames the page sent, by messageType
  */
 export const relaySessions = async (page) => {
@@ -28,6 +30,7 @@ export const relaySessions = async (page) => {
     sockets: [],
     counts: {},
     dropIceRestart: false,
+    busyIceRestarts: 0,
     hold: false,
     closeFromServer: async (code, reason) => {
       const newest = control.sockets[control.sockets.length - 1];
@@ -38,19 +41,30 @@ export const relaySessions = async (page) => {
   };
 
   await page.routeWebSocket(SESSION_SOCKET, (ws) => {
-    const entry = { page: ws, server: null };
+    const entry = { page: ws, server: null, closed: false };
     control.sockets.push(entry);
     if (!control.hold) {
       entry.server = ws.connectToServer();
       entry.server.onMessage((message) => ws.send(message));
       entry.server.onClose((code, reason) => ws.close({ code, reason }).catch(() => {}));
     }
+    // Recorded so a test can wait for the page to have closed a socket; the Engine side is
+    // closed with it, as it would be without the route.
+    ws.onClose((code, reason) => {
+      entry.closed = true;
+      if (entry.server) entry.server.close({ code, reason }).catch(() => {});
+    });
     ws.onMessage((message) => {
       let type = 'text';
       try { type = JSON.parse(message).messageType || 'unknown'; } catch { /* not JSON */ }
       control.counts[type] = (control.counts[type] || 0) + 1;
       if (!entry.server) return;
       if (type === 'ICE_RESTART' && control.dropIceRestart) return;
+      if (type === 'ICE_RESTART' && control.busyIceRestarts > 0) {
+        control.busyIceRestarts -= 1;
+        ws.send(JSON.stringify({ statusCode: 425, statusDescription: 'ICE restart already in progress' }));
+        return;
+      }
       entry.server.send(message);
     });
   });
