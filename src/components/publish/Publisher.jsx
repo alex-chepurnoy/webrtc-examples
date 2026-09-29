@@ -12,7 +12,13 @@ import startPublish from '../../webrtc/startPublish';
 import stopPublish from '../../webrtc/stopPublish';
 import replaceAudioTrack from '../../webrtc/replaceAudioTrack';
 import replaceVideoTrack from '../../webrtc/replaceVideoTrack';
-import { applySimulcastParameters } from '../../utils/SimulcastUtils';
+import {
+  AUDIO_MAX_BITRATE_KBPS,
+  VIDEO_MAX_BITRATE_KBPS,
+  applyAudioSenderParameters,
+  applyVideoSenderParameters,
+  maxBitrateKbpsToApply,
+} from '../../utils/SenderParameters';
 
 const Publisher = () => {
 
@@ -135,18 +141,46 @@ const Publisher = () => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[dispatch,videoTrack]);
 
-  // Apply the simulcast scale down values, which can change mid-stream.
-  // Re-runs on connect so edits made while connecting are picked up.
+  // The sender limits: bitrate caps, simulcast scale down and bitrate per rendition, and
+  // what to give up when bandwidth is short. All of them can change mid-stream.
+  //
+  // One effect per sender and nothing else writes their parameters, so two setParameters
+  // never overlap on one sender (SenderParameters.js queues them as well). They depend on
+  // the sender objects themselves: replaceVideoTrack and replaceAudioTrack add a new sender
+  // when there was none, and that one needs the limits too. Re-runs on connect, so values
+  // edited while connecting are picked up. An invalid cap is passed as undefined, which
+  // leaves the running value alone while the field shows its error.
+  const {
+    useSimulcast,
+    simulcastRenditions,
+    videoMaxBitrateKbps,
+    audioMaxBitrateKbps,
+    degradationPreference,
+  } = publishSettings;
+  const connected = webrtcPublish.connected;
+
   useEffect(() => {
-    if (!webrtcPublish.connected || !publishSettings.useSimulcast || videoSender == null) return;
+    if (!connected || videoSender == null) return;
 
-    applySimulcastParameters(videoSender, publishSettings.simulcastRenditions)
-      .catch((error) => {
-        dispatch({type:ErrorsActions.SET_ERROR_MESSAGE, message:'Simulcast update failed: ' + error.message});
-      });
+    applyVideoSenderParameters(videoSender, {
+      simulcast: useSimulcast,
+      renditions: simulcastRenditions,
+      maxBitrateKbps: maxBitrateKbpsToApply(videoMaxBitrateKbps, VIDEO_MAX_BITRATE_KBPS),
+      degradationPreference,
+    }).catch((error) => {
+      dispatch({type:ErrorsActions.SET_ERROR_MESSAGE, message:'Could not apply the video limits: ' + error.message});
+    });
+  },[dispatch,connected,videoSender,useSimulcast,simulcastRenditions,videoMaxBitrateKbps,degradationPreference]);
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[dispatch,publishSettings.simulcastRenditions,webrtcPublish.connected]);
+  useEffect(() => {
+    if (!connected || audioSender == null) return;
+
+    applyAudioSenderParameters(audioSender, {
+      maxBitrateKbps: maxBitrateKbpsToApply(audioMaxBitrateKbps, AUDIO_MAX_BITRATE_KBPS),
+    }).catch((error) => {
+      dispatch({type:ErrorsActions.SET_ERROR_MESSAGE, message:'Could not apply the audio limit: ' + error.message});
+    });
+  },[dispatch,connected,audioSender,audioMaxBitrateKbps]);
 
   return <></>;
 }

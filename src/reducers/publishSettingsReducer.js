@@ -21,6 +21,12 @@ const initialState = {
   videoFrameRate: '30',
   videoFrameSize: 'default',
   videoCodec: DEFAULT_VIDEO_CODEC,
+  // Sender limits, in kbps as typed. Blank means no cap and '' preference means the
+  // browser's own. Session only, like the codec and frame settings: not in the cookie or
+  // the share link.
+  videoMaxBitrateKbps: '',
+  audioMaxBitrateKbps: '',
+  degradationPreference: '',
   userData: undefined,
   useWhip: false,
   authToken: '',
@@ -74,6 +80,12 @@ const publishSettingsReducer = (state = initialState, action) => {
       return { ...state, userData:action.userData };
     case PublishSettingsActions.SET_PUBLISH_VIDEO_CODEC:
       return { ...state, videoCodec: action.videoCodec };
+    case PublishSettingsActions.SET_PUBLISH_VIDEO_MAX_BITRATE:
+      return { ...state, videoMaxBitrateKbps: action.videoMaxBitrateKbps };
+    case PublishSettingsActions.SET_PUBLISH_AUDIO_MAX_BITRATE:
+      return { ...state, audioMaxBitrateKbps: action.audioMaxBitrateKbps };
+    case PublishSettingsActions.SET_PUBLISH_DEGRADATION_PREFERENCE:
+      return { ...state, degradationPreference: action.degradationPreference };
     case PublishSettingsActions.SET_PUBLISH_USE_WHIP:
       return { ...state, useWhip: action.useWhip };
     case PublishSettingsActions.SET_PUBLISH_AUTH_TOKEN:

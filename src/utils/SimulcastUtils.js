@@ -4,7 +4,13 @@
 // on the wire: encoding layers, transceiver setup, defensive SDP munging,
 // RFC 8853 answer detection and mid-stream parameter updates.
 
+// Chrome's WebRTC engine (libwebrtc) encodes at most 3 simulcast layers, so a fourth
+// encoding would be accepted by addTransceiver and then never sent. The table explains the
+// limit where the Add button stops; see SIMULCAST_LIMIT_REASON.
 export const MAX_SIMULCAST_RENDITIONS = 3;
+
+export const SIMULCAST_LIMIT_REASON =
+  `Chrome encodes at most ${MAX_SIMULCAST_RENDITIONS} simulcast layers, so this page offers no more than ${MAX_SIMULCAST_RENDITIONS} renditions.`;
 
 // Browsers (Chrome in particular) reject longer RIDs in addTransceiver.
 export const MAX_RID_LENGTH = 16;
@@ -59,17 +65,17 @@ export const getSimulcastRenditionsError = (renditions) => {
   const rids = new Set();
   for (const rendition of renditions) {
     if (!RID_PATTERN.test(rendition.rid))
-      return `Invalid RID "${rendition.rid}": use only letters, numbers, - and _`;
+      return `Invalid Rendition ID "${rendition.rid}": use only letters, numbers, - and _`;
     if (rendition.rid.length > MAX_RID_LENGTH)
-      return `Invalid RID "${rendition.rid}": maximum length is ${MAX_RID_LENGTH}`;
+      return `Invalid Rendition ID "${rendition.rid}": maximum length is ${MAX_RID_LENGTH}`;
     if (rids.has(rendition.rid))
-      return `Duplicate RID: ${rendition.rid}`;
+      return `Duplicate Rendition ID: ${rendition.rid}`;
     rids.add(rendition.rid);
 
     if (!(Number(rendition.scaleResolutionDownBy) >= 1))
       return `Invalid resolution scale down for "${rendition.rid}": must be 1 or greater`;
     if (!(Number(rendition.maxBitrate) > 0))
-      return `Invalid max bitrate for "${rendition.rid}": must be greater than 0`;
+      return `Invalid max bitrate for "${rendition.rid}": must be greater than 0 kbps`;
   }
   return null;
 };
@@ -122,27 +128,9 @@ export const addSimulcastVideoSender = (peerConnection, videoTrack, renditions) 
   return transceiver.sender;
 };
 
-// Applies the scale down values, which may change mid-stream, to the
-// negotiated encodings, matched by rid. Renditions that were not negotiated
-// are ignored.
-export const applySimulcastParameters = (videoSender, renditions) => {
-  if (videoSender == null || typeof videoSender.getParameters !== "function")
-    return Promise.resolve();
-
-  const parameters = videoSender.getParameters();
-  if (!parameters.encodings || parameters.encodings.length === 0)
-    return Promise.resolve();
-
-  const renditionsByRid = new Map(renditions.map((rendition) => [rendition.rid, rendition]));
-  parameters.encodings.forEach((encoding) => {
-    const rendition = renditionsByRid.get(encoding.rid);
-    if (!rendition) return;
-    const scale = Number(rendition.scaleResolutionDownBy);
-    if (scale >= 1) encoding.scaleResolutionDownBy = scale;
-  });
-
-  return videoSender.setParameters(parameters);
-};
+// Mid-stream changes to the negotiated encodings (scale down and max bitrate per rendition)
+// go through applyVideoSenderParameters in SenderParameters.js, the only writer of a
+// sender's parameters, so two updates can never race on one sender.
 
 // RFC 8851 per-RID restriction string for one encoding. Only max-br today —
 // extend here (max-width, max-height, max-fps, …) if we want more layer
