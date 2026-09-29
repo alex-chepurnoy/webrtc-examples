@@ -27,6 +27,16 @@ const openTipOf = async (page, topic) => {
   return { button, tip: page.locator(`[id="${id}"]`) };
 };
 
+/*
+ * Focus as a keyboard user gives it. A tip opens on keyboard focus only, not on the focus a
+ * mouse click leaves behind, so a bare element.focus() after the tab was clicked is not
+ * enough: a key press first says the keyboard is in use.
+ */
+const keyboardFocus = async (page, locator) => {
+  await page.keyboard.press('Shift');
+  await locator.focus();
+};
+
 test.describe('Source tab layout', () => {
   for (const width of [NARROWEST, 340]) {
     test(`fits a ${width}px panel: no horizontal scroll, no field narrower than its label`, async ({ page }) => {
@@ -176,11 +186,51 @@ test.describe('Source tab explainers', () => {
     await expect(tip).toBeHidden();
   });
 
+  test('after a pin and a closing click, hovering out closes it though the button keeps focus', async ({ page }) => {
+    await page.goto('/#/publish');
+    await openTab(page, 'Source');
+    const { button, tip } = await openTipOf(page, 'Scale down');
+    await button.click();
+    await expect(tip).toBeVisible();
+    await button.click();
+    await expect(tip).toBeHidden();
+    await page.mouse.move(5, 5);
+    await button.hover();
+    await expect(tip).toBeVisible();
+    await page.mouse.move(5, 5);
+    await expect(button).toBeFocused();
+    await expect(tip).toBeHidden();
+  });
+
+  test('a pinned tip closes when its button scrolls out of the panel', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await page.goto('/#/publish');
+    await openTab(page, 'Source');
+    const { button, tip } = await openTipOf(page, 'Video codec');
+    await button.click();
+    await expect(tip).toBeVisible();
+    await page.mouse.move(5, 5);
+    await page.locator('.wz-inspector__body').evaluate((el) => { el.scrollTop = el.scrollHeight; });
+    await expect(tip).toBeHidden();
+  });
+
+  test('a pinned tip closes when its tab is switched from the keyboard', async ({ page }) => {
+    await page.goto('/#/publish');
+    await openTab(page, 'Source');
+    const { button, tip } = await openTipOf(page, 'Frame size');
+    await button.click();
+    await expect(tip).toBeVisible();
+    await page.getByRole('tab', { name: 'Source', exact: true }).focus();
+    await page.keyboard.press('ArrowRight');
+    await expect(page.getByRole('tab', { name: 'Advanced', exact: true })).toHaveAttribute('aria-selected', 'true');
+    await expect(tip).toBeHidden();
+  });
+
   test('keyboard focus opens it and Escape closes it, leaving focus on the button', async ({ page }) => {
     await page.goto('/#/publish');
     await openTab(page, 'Source');
     const { button, tip } = await openTipOf(page, 'Frame rate');
-    await button.focus();
+    await keyboardFocus(page, button);
     await expect(tip).toBeVisible();
     await expect(tip).toContainText('ideal');
     await page.keyboard.press('Escape');
@@ -188,13 +238,13 @@ test.describe('Source tab explainers', () => {
     await expect(button).toBeFocused();
   });
 
-  test('it is readable in light and dark: the text colour differs from its ground', async ({ page }) => {
+  test('it is readable in light and dark: the text color differs from its ground', async ({ page }) => {
     for (const theme of ['light', 'dark']) {
       await page.goto('/#/publish');
       await page.evaluate((t) => document.documentElement.setAttribute('data-bs-theme', t), theme);
       await openTab(page, 'Source');
       const { button, tip } = await openTipOf(page, 'Max video bitrate');
-      await button.focus();
+      await keyboardFocus(page, button);
       await expect(tip).toBeVisible();
       const ratio = await tip.evaluate((el) => {
         const lum = (c) => {
@@ -222,7 +272,7 @@ test.describe('Source tab explainers', () => {
     await page.locator('.wz-inspector__body').evaluate((el) => { el.scrollTop = el.scrollHeight; });
 
     const { button, tip } = await openTipOf(page, 'Max audio bitrate');
-    await button.focus();
+    await keyboardFocus(page, button);
     await expect(tip).toBeVisible();
 
     const where = await tip.evaluate((el) => {
@@ -288,18 +338,39 @@ const settledKbps = async (page, kind, capKbps) => {
     if (Date.now() - start > 4000 && recent.length >= 5) {
       const sorted = recent.map((s) => s.kbps).sort((a, b) => a - b);
       const median = sorted[Math.floor(sorted.length / 2)];
-      if (median <= capKbps * 1.1) return { median, target: now.target, samples: samples.length };
+      const targets = recent.map((s) => s.target).filter((t) => t != null);
+      const maxTarget = targets.length ? Math.max(...targets) : null;
+      if (median <= capKbps * 1.1) return { median, maxTarget, samples: samples.length };
     }
     await page.waitForTimeout(500);
   }
-  const recent = samples.slice(-6).map((s) => s.kbps).sort((a, b) => a - b);
-  return { median: recent[Math.floor(recent.length / 2)], target: last?.target ?? null, samples: samples.length };
+  const tail = samples.slice(-6);
+  const recent = tail.map((s) => s.kbps).sort((a, b) => a - b);
+  const targets = tail.map((s) => s.target).filter((t) => t != null);
+  return {
+    median: recent[Math.floor(recent.length / 2)],
+    maxTarget: targets.length ? Math.max(...targets) : null,
+    samples: samples.length,
+  };
 };
+
+/** The video encoder's current targetBitrate in bps, summed over encodings; null if unreported. */
+const videoTarget = (page) => page.evaluate(async () => {
+  const pc = (window.__pcs || []).at(-1);
+  if (!pc) return null;
+  let target = null;
+  (await pc.getStats()).forEach((r) => {
+    if (r.type === 'outbound-rtp' && r.kind === 'video' && r.targetBitrate != null) {
+      target = (target || 0) + r.targetBitrate;
+    }
+  });
+  return target;
+});
 
 const noErrorBanner = (page) => expect(page.locator('#error-messages')).toHaveCount(0);
 
 test.describe('Source tab limits on a live publish', () => {
-  test('caps video at 300 kbps and audio at 16 kbps, and sets the bandwidth preference', async ({ page, browserName }) => {
+  test('caps video at 300 kbps and audio at 16 kbps from the start, and sets the bandwidth preference', async ({ page, browserName }) => {
     await hookConnections(page);
     await page.goto('/#/publish');
     await requireEngine(page, test);
@@ -324,11 +395,47 @@ test.describe('Source tab limits on a live publish', () => {
 
     const video = await settledKbps(page, 'video', 300);
     expect(video.median, `video settled at ${video.median} kbps`).toBeLessThanOrEqual(330);
-    if (video.target != null) expect(video.target).toBeLessThanOrEqual(300_000);
+    // The encoder's own target is the proof that the cap is what holds it down, rather than a
+    // slow network or a bandwidth estimate still ramping. Chrome reports it; the tolerance is
+    // for its rounding only.
+    if (browserName === 'chromium') {
+      expect(video.maxTarget, 'Chrome reported no targetBitrate').not.toBeNull();
+      expect(video.maxTarget, 'the encoder aimed above the cap').toBeLessThanOrEqual(300_000 * 1.01);
+    }
 
     const audio = await settledKbps(page, 'audio', 16);
     expect(audio.median, `audio settled at ${audio.median} kbps`).toBeLessThanOrEqual(18);
 
+    await noErrorBanner(page);
+  });
+
+  /*
+   * The control: the same publish without a cap must aim well above 300 kbps, or the capped
+   * test above could pass on a network that never allowed more. Then the cap goes on live and
+   * the target has to come down under it.
+   */
+  test('an uncapped publish aims above 400 kbps, and a live 300 kbps cap brings it under', async ({ page, browserName }) => {
+    test.skip(browserName !== 'chromium', 'targetBitrate is a Chrome statistic');
+    await hookConnections(page);
+    await page.goto('/#/publish');
+    await requireEngine(page, test);
+    await startPublishing(page, { streamName: uniqueStream('e2eCapCtl') });
+    await expectLive(page);
+
+    await expect.poll(async () => (await videoTarget(page)) ?? 0, {
+      timeout: 25_000,
+      message: 'the uncapped encoder never aimed above 400 kbps, so a cap of 300 would prove nothing',
+    }).toBeGreaterThan(400_000);
+
+    await openTab(page, 'Source');
+    await page.fill('#videoMaxBitrate', '300');
+    await page.locator('#videoMaxBitrate').press('Enter');
+
+    await expect.poll(async () => (await videoTarget(page)) ?? Infinity, { timeout: 15_000 })
+      .toBeLessThanOrEqual(300_000 * 1.01);
+    const video = await settledKbps(page, 'video', 300);
+    expect(video.median, `video settled at ${video.median} kbps`).toBeLessThanOrEqual(330);
+    expect(video.maxTarget).toBeLessThanOrEqual(300_000 * 1.01);
     await noErrorBanner(page);
   });
 

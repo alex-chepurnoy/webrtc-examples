@@ -617,8 +617,8 @@
 
 /*
  * The pop-over. It lives in document.body, outside the inspector, so it is styled here without
- * the .wz-inspector scope, and takes its colours from the same tokens: a raised surface with
- * the text colour of that theme, never a fixed dark ground under a theme text colour.
+ * the .wz-inspector scope, and takes its colors from the same tokens: a raised surface with
+ * the text color of that theme, never a fixed dark ground under a theme text color.
  */
 .wz-info-tip {
   position: fixed;
