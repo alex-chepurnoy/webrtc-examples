@@ -29,7 +29,11 @@ const StatusBadges = () => {
     </span>
   );
 
-  const reconnectingLabel = (state) => `Reconnecting ${state.attempt}/${state.max}`;
+  // A replay waiting for its stream, or for an Engine that is restarting, is not failing, and
+  // the attempt count is not moving; the badge says what it is waiting for instead.
+  const WAITING_LABELS = { stream: 'Waiting for stream', engine: 'Waiting for Engine' };
+  const reconnectingLabel = (state) => WAITING_LABELS[state.waiting]
+    || `Reconnecting ${state.attempt}/${state.max}`;
   const reconnectingTitle = (what, state) =>
     `${what} lost its session with the Engine (${state.reason}) and is starting a new one`;
 

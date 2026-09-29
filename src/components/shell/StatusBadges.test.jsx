@@ -52,4 +52,20 @@ describe('StatusBadges', () => {
     });
     expect(document.querySelector('#video-live-indicator-live')).toHaveTextContent('LIVE');
   });
+
+  it('says what a reconnect is waiting for', () => {
+    const store = configureStore({
+      reducer: rootReducer,
+      middleware: (getDefault) => getDefault({ serializableCheck: false, immutableCheck: false }),
+    });
+    render(<Provider store={store}><StatusBadges /></Provider>);
+    act(() => {
+      store.dispatch({ type: WebRTCPlayActions.SET_WEBRTC_PLAY_RECONNECTING,
+        reconnecting: { attempt: 1, max: 6, reason: 'no media', waiting: 'stream' } });
+      store.dispatch({ type: WebRTCPublishActions.SET_WEBRTC_PUBLISH_RECONNECTING,
+        reconnecting: { attempt: 1, max: 6, reason: 'socket closed', waiting: 'engine' } });
+    });
+    expect(document.querySelector('#video-play-indicator-reconnecting')).toHaveTextContent('Waiting for stream');
+    expect(document.querySelector('#video-live-indicator-reconnecting')).toHaveTextContent('Waiting for Engine');
+  });
 });
