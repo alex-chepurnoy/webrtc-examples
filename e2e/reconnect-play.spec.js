@@ -74,7 +74,7 @@ test.describe('play reconnect over wss', () => {
     test.setTimeout(120_000);
     const { publisher, streamName } = await publishStream(browser, 'e2eRePlayGap', test);
     const viewer = await browser.newPage();
-    await useTimings(viewer, { stallMs: 5000, stallPollMs: 1000 });
+    await useTimings(viewer, { stallMs: 5000, stallPollMs: 1000, waitRetryMs: 3000 });
     await viewer.goto('/#/play');
     await playUntilDecoding(viewer, streamName);
 
@@ -86,9 +86,11 @@ test.describe('play reconnect over wss', () => {
     await expectRow(viewer, 'warn', /^play session lost \(.+\): reconnecting, attempt 1 of 6/);
     await expect(viewer.locator(RECONNECTING)).toBeVisible();
 
-    // Long enough for a replay to find the stream not running yet, which it has to wait out
-    // rather than give up on.
-    await viewer.waitForTimeout(4000);
+    // Long enough for replays to find the stream not running yet, which they wait out at their
+    // own cadence instead of spending attempts on it.
+    await expectRow(viewer, 'warn', `play waiting for stream "${streamName}" to come back (`);
+    await viewer.waitForTimeout(8000);
+    await expect(viewer.locator(RECONNECTING)).toHaveText('Reconnecting 1/6');
     await publisher.locator('#publish-toggle').click();
     await expectLive(publisher);
 

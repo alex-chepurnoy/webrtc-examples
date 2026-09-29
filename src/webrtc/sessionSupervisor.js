@@ -39,6 +39,15 @@ const JITTER = 0.2;
 const TERMINAL_STATUSES = new Set([401, 403, 404]);
 
 /*
+ * A replay that finds the stream not running yet has not failed: its publisher is on its own
+ * way back, and after an application restart the publisher needs up to a minute to notice.
+ * Those answers are asked again at this cadence, for up to this long after the loss, without
+ * spending the attempts, which are kept for failures of the connection itself.
+ */
+export const WAIT_FOR_STREAM_RETRY_MS = 15000;
+export const WAIT_FOR_STREAM_LIMIT_MS = 120000;
+
+/*
  * The timings, overridable from window.__wzReconnectTimings. For the end-to-end tests only:
  * a real application restart takes a liveness check a minute to notice, and a test cannot
  * wait that long for every case. Unknown keys and bad values fall back to the defaults.
@@ -70,12 +79,15 @@ const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
  * monitors:     functions started when an attempt connects, each returning its stop function.
  *               They get { settings, handle, reportLost(info) }.
  * words:        { lost, attempt } for the panel: "republishing" / "republish attempt"
+ * isWaitingForStream: (failure) => true for a failure that means the stream is not running
+ *               yet (the player's 502 and 514), which is waited for instead of counted
  */
 export const createSessionSupervisor = ({
   role,
   startAttempt,
   monitors = [],
   words = { lost: 'reconnecting', attempt: 'reconnect attempt' },
+  isWaitingForStream = () => false,
   now = () => Date.now(),
   random = Math.random,
 }) => {
@@ -151,6 +163,33 @@ export const createSessionSupervisor = ({
       : `Lost the session with the Engine: ${reason}. Gave up after ${plural(attempts, 'attempt')}.`);
   };
 
+  // Asks again for a stream that is not running yet; the attempt count stays where it is.
+  const waitForStream = (reason) => {
+    const limit = reconnectTiming('waitLimitMs', WAIT_FOR_STREAM_LIMIT_MS);
+    const cadence = reconnectTiming('waitRetryMs', WAIT_FOR_STREAM_RETRY_MS);
+    const waited = now() - lostAt;
+    const streamName = context && context.settings ? context.settings.streamName : '';
+    if (waited + cadence > limit) {
+      logEvent('error', 'pc',
+        `${role} recovery gave up: stream "${streamName}" did not come back within ${formatSeconds(limit)}`,
+        { lostBecause: lostReason, lastFailure: reason });
+      finish();
+      ui('onFailed', `Lost the session with the Engine: ${lostReason}. `
+        + `The stream did not come back within ${Math.round(limit / 60000)} minutes.`);
+      return;
+    }
+    logEvent('warn', 'pc',
+      `${role} waiting for stream "${streamName}" to come back (${Math.round(waited / 1000)} s of ${Math.round(limit / 1000)} s)`,
+      { lastAnswer: reason, askingAgainIn: formatSeconds(cadence) });
+    ui('onReconnecting', { attempt, max: MAX_RECONNECT_ATTEMPTS, reason: lostReason, waiting: true });
+    backoffTimer = setTimeout(() => {
+      backoffTimer = null;
+      if (!active) return;
+      logEvent('info', 'pc', `${role} ${words.attempt} ${attempt}, asking again for stream "${streamName}"`, null);
+      launch();
+    }, cadence);
+  };
+
   const schedule = (describe) => {
     attempt += 1;
     const delays = reconnectTiming('delaysMs', RECONNECT_DELAYS_MS);
@@ -197,6 +236,7 @@ export const createSessionSupervisor = ({
 
     // One of the replacements failed.
     if (info.terminal || TERMINAL_STATUSES.has(info.status)) { giveUp(lostReason, reason, true); return; }
+    if (isWaitingForStream(info)) { waitForStream(reason); return; }
     if (attempt >= MAX_RECONNECT_ATTEMPTS) { giveUp(lostReason, reason, false); return; }
     const failedAttempt = attempt;
     schedule((next) => `${role} ${words.attempt} ${failedAttempt} failed (${reason}): ${next}`);

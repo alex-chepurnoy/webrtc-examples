@@ -14,11 +14,16 @@ const stallMonitor = ({ handle, reportLost }) => startStallWatch({
   onStall: reportLost,
 });
 
+// The Engine's "Live stream is not running" and "Stream not ready": the publisher is not back
+// yet, which a replay waits for rather than counts as a failed attempt.
+export const STREAM_NOT_RUNNING_STATUSES = new Set([502, 514]);
+
 export const createPlaySupervisor = (overrides = {}) => createSessionSupervisor({
   role: 'play',
   startAttempt: startPlay,
   monitors: [stallMonitor],
   words: { lost: 'reconnecting', attempt: 'reconnect attempt' },
+  isWaitingForStream: (failure) => STREAM_NOT_RUNNING_STATUSES.has(failure && failure.status),
   ...overrides,
 });
 

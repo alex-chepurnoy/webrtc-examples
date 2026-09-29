@@ -11,7 +11,7 @@ import { clearLog, getEntries } from '../diagnostics/signalLog';
 
 const labels = () => getEntries().map((e) => `${e.direction} ${e.channel}: ${e.label}`);
 
-const setup = ({ monitors = [], readLive } = {}) => {
+const setup = ({ monitors = [], readLive, isWaitingForStream } = {}) => {
   const attempts = [];
   const startAttempt = vi.fn((settings, callbacks) => {
     const handle = { close: vi.fn(), isIceRestartInProgress: () => false };
@@ -24,6 +24,7 @@ const setup = ({ monitors = [], readLive } = {}) => {
     startAttempt,
     monitors,
     words: { lost: 'republishing', attempt: 'republish attempt' },
+    isWaitingForStream,
     random: () => 0.5,
   });
   const start = () => supervisor.start({
@@ -226,5 +227,54 @@ describe('sessionSupervisor', () => {
     // A stopped monitor's late report changes nothing.
     report({ reason: 'again' });
     expect(labels().some((l) => l.includes('again'))).toBe(false);
+  });
+
+  describe('waiting for a stream that is not running yet', () => {
+    const notRunning = { message: 'Websocket Error: Live stream is not running: cam', status: 502 };
+    const waitingSetup = () => setup({ isWaitingForStream: (failure) => failure.status === 502 });
+
+    it('asks again every 15 s without spending attempts, then gives up after 2 minutes', () => {
+      const t = waitingSetup();
+      t.start();
+      t.connect(0);
+      t.attempts[0].callbacks.onSessionLost({ reason: 'no media received for 10 s' });
+      vi.advanceTimersByTime(1000);
+      expect(t.startAttempt).toHaveBeenCalledTimes(2);
+
+      // Ten "not running" answers are more than the six attempts, and none of them count.
+      for (let index = 1; index <= 7; index += 1) {
+        t.attempts[index].callbacks.onError(notRunning);
+        expect(t.ui.onReconnecting).toHaveBeenLastCalledWith(
+          { attempt: 1, max: 6, reason: 'no media received for 10 s', waiting: true });
+        vi.advanceTimersByTime(15_000);
+        expect(t.startAttempt).toHaveBeenCalledTimes(index + 2);
+      }
+      expect(labels()).toContain('warn pc: publish waiting for stream "cam" to come back (1 s of 120 s)');
+      expect(labels()).toContain('warn pc: publish waiting for stream "cam" to come back (91 s of 120 s)');
+      expect(labels()).toContain('info pc: publish republish attempt 1, asking again for stream "cam"');
+      expect(t.supervisor.active).toBe(true);
+
+      // 106 s in: another 15 s would pass the limit, so this is the end.
+      t.attempts[8].callbacks.onError(notRunning);
+      expect(t.supervisor.active).toBe(false);
+      expect(labels()).toContain('error pc: publish recovery gave up: stream "cam" did not come back within 120 s');
+      expect(t.ui.onFailed).toHaveBeenCalledWith(
+        'Lost the session with the Engine: no media received for 10 s. The stream did not come back within 2 minutes.');
+    });
+
+    it('still counts a failure of the connection itself as an attempt', () => {
+      const t = waitingSetup();
+      t.start();
+      t.connect(0);
+      t.attempts[0].callbacks.onSessionLost({ reason: 'socket closed' });
+      vi.advanceTimersByTime(1000);
+      t.attempts[1].callbacks.onError(notRunning);
+      vi.advanceTimersByTime(15_000);
+      t.attempts[2].callbacks.onError({ message: 'Websocket Error: refused' });
+      expect(t.ui.onReconnecting).toHaveBeenLastCalledWith({ attempt: 2, max: 6, reason: 'socket closed' });
+      vi.advanceTimersByTime(2000);
+      t.connect(3);
+      expect(labels()).toContain('info pc: publish recovered after 2 attempts (18 s)');
+    });
   });
 });
