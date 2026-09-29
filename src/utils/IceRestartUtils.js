@@ -28,11 +28,25 @@ export const consumeIceRestartOffer = (peerConnection) => {
 
 // Attaches an oniceconnectionstatechange handler that requests an ICE restart when the
 // connection drops, automatically recovering the session in place.
+//
+// This only ever fixes the network path. When the Engine has lost the session itself (an
+// application restart, an Engine restart) no ICE restart can help, and the session
+// supervisor (sessionSupervisor.js) replaces the whole connection instead; it reads
+// isRestartInProgress() and hasRestartBeenAnswered() from here to tell the two apart.
 export const attachIceRestartRecovery = (peerConnection) => {
   let iceRestartGraceTimer = null;
+  let retryTimer = null;
   let iceRestartInProgress = false;
+  let restartAnswered = false;
+  let disposed = false;
+
+  const clearTimers = () => {
+    if (iceRestartGraceTimer) { clearTimeout(iceRestartGraceTimer); iceRestartGraceTimer = null; }
+    if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+  };
 
   const requestIceRestart = (reason) => {
+    if (disposed) return;
     if (iceRestartInProgress) return; // one restart at a time; the engine rejects concurrent restarts
     if (typeof peerConnection.restartIce !== 'function') {
       console.warn('ICE restart needed but restartIce() is not supported in this browser.');
@@ -44,7 +58,8 @@ export const attachIceRestartRecovery = (peerConnection) => {
     peerConnection.restartIce();
   };
 
-  peerConnection.oniceconnectionstatechange = () => {
+  const handler = () => {
+    if (disposed) return;
     const iceState = peerConnection.iceConnectionState;
     console.log(`ICE connection state: ${iceState}`);
 
@@ -69,8 +84,9 @@ export const attachIceRestartRecovery = (peerConnection) => {
       case 'connected':
       case 'completed':
         // Recovered (or initial connect): clear pending work and re-arm for the next change.
-        if (iceRestartGraceTimer) { clearTimeout(iceRestartGraceTimer); iceRestartGraceTimer = null; }
+        clearTimers();
         iceRestartInProgress = false;
+        restartAnswered = false;
         break;
       default:
         // 'new' / 'checking' / 'closed' - no recovery action needed; log just in case.
@@ -78,13 +94,38 @@ export const attachIceRestartRecovery = (peerConnection) => {
         break;
     }
   };
+  peerConnection.oniceconnectionstatechange = handler;
 
-  // For transports that drive the restart from outside this module (WHIP/WHEP renegotiate via
-  // onnegotiationneeded): if that restart attempt fails, ICE stays failed/disconnected and no
-  // further state-change event fires, so the "one restart at a time" guard would block every
-  // retry forever. notifyRestartFailed() clears the guard so a later transition can try again.
   return {
+    // For transports that drive the restart from outside this module (WHIP/WHEP renegotiate via
+    // onnegotiationneeded): if that restart attempt fails, ICE stays failed/disconnected and no
+    // further state-change event fires, so the "one restart at a time" guard would block every
+    // retry forever. notifyRestartFailed() clears the guard so a later transition can try again.
     notifyRestartFailed: () => { iceRestartInProgress = false; },
+    // The Engine answered 425: it is still busy with a restart of its own. Not a lost session,
+    // so the same restart is asked for again once it has had time to finish.
+    retryRestart: (delayMs, reason) => {
+      iceRestartInProgress = false;
+      if (disposed || retryTimer) return;
+      retryTimer = setTimeout(() => {
+        retryTimer = null;
+        const current = peerConnection.iceConnectionState;
+        if (current === 'disconnected' || current === 'failed') requestIceRestart(reason);
+      }, delayMs);
+    },
+    isRestartInProgress: () => iceRestartInProgress,
+    // The Engine answered a restart. If the connection still fails after that, the restart
+    // did not work and the session is gone rather than the path; ICE connecting again clears it.
+    notifyRestartAnswered: () => { restartAnswered = true; },
+    hasRestartBeenAnswered: () => restartAnswered,
+    // A replaced connection must not go on requesting restarts, or restart timers firing into
+    // a closed connection, after the session has moved on.
+    dispose: () => {
+      disposed = true;
+      clearTimers();
+      if (peerConnection.oniceconnectionstatechange === handler)
+        peerConnection.oniceconnectionstatechange = null;
+    },
   };
 };
 
