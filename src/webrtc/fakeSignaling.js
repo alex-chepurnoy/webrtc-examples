@@ -65,6 +65,10 @@ export class FakePeerConnection extends EventTarget {
     this.config = config;
     this.connectionState = 'new';
     this.iceConnectionState = 'new';
+    this.signalingState = 'stable';
+    // The browser's negotiation-needed flag, and whether a restart is owed (see restartIce).
+    this.negotiationNeeded = false;
+    this.restartOwed = false;
     this.localDescription = null;
     this.remoteDescription = null;
     this.currentRemoteDescription = null;
@@ -82,12 +86,39 @@ export class FakePeerConnection extends EventTarget {
     return { type: 'offer', sdp: 'v=0\r\na=ice-ufrag:local\r\na=ice-pwd:localpwd\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n' };
   }
 
-  async setLocalDescription(description) { this.localDescription = description; }
+  // Offer/answer as the browser tracks it. A local offer leaves stable until an answer or a
+  // rollback. negotiationneeded fires only when the flag goes from false to true, and only in
+  // stable; a rolled-back restart is still owed, so the rollback raises it again at once. That
+  // is what makes a restart offer left applied after a 425, or a re-raised event dropped by the
+  // gate, impossible to retry with restartIce() alone.
+  raiseNegotiationNeeded() {
+    queueMicrotask(() => { if (this.onnegotiationneeded) this.onnegotiationneeded(new Event('negotiationneeded')); });
+  }
+
+  async setLocalDescription(description) {
+    if (description && description.type === 'rollback') {
+      this.signalingState = 'stable';
+      this.localDescription = this.stableLocalDescription || null;
+      if (this.restartOwed) {
+        this.negotiationNeeded = true;
+        this.raiseNegotiationNeeded();
+      }
+      return;
+    }
+    this.localDescription = description;
+    if (description && description.type === 'offer') this.signalingState = 'have-local-offer';
+  }
 
   async setRemoteDescription(description) {
     if (this.closed) throw new Error('closed');
     this.remoteDescription = description;
     this.currentRemoteDescription = description;
+    if (description && description.type === 'answer') {
+      this.signalingState = 'stable';
+      this.stableLocalDescription = this.localDescription;
+      this.restartOwed = false;
+      this.negotiationNeeded = false;
+    }
   }
 
   async addIceCandidate() {}
@@ -97,7 +128,10 @@ export class FakePeerConnection extends EventTarget {
   getSenders() { return []; }
 
   restartIce() {
-    queueMicrotask(() => { if (this.onnegotiationneeded) this.onnegotiationneeded(); });
+    this.restartOwed = true;
+    if (this.negotiationNeeded) return;
+    this.negotiationNeeded = true;
+    if (this.signalingState === 'stable') this.raiseNegotiationNeeded();
   }
 
   close() {

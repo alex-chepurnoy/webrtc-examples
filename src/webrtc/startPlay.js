@@ -28,12 +28,13 @@ import {
 } from '../diagnostics/latencyProbe';
 import {
   ICE_RESTART_BUSY_STATUS,
-  ICE_RESTART_RETRY_MS,
   armIceRestartTimeout,
+  clearBusyIceRestarts,
   clearIceRestartTimeout,
   describeIceRestartStatus,
   guardAttemptCallbacks,
   logIceRestartUnanswered,
+  retryBusyIceRestart,
   sessionLostFromClose,
   withIceRestartTimeout,
 } from './sessionLoss';
@@ -145,10 +146,10 @@ const handleIceRestartStatus = (status, description, callbacks, session) => {
   clearIceRestartTimeout(session);
   session.iceRestartPending = false;
   if (status === ICE_RESTART_BUSY_STATUS) {
-    logEvent('warn', 'ws',
-      `play status 425 to ICE_RESTART: the Engine is still restarting ICE, asking again in ${ICE_RESTART_RETRY_MS / 1000} s`,
-      description || null);
-    if (session.recovery) session.recovery.retryRestart(ICE_RESTART_RETRY_MS, 'retry after 425');
+    retryBusyIceRestart({
+      label: 'play status 425 to ICE_RESTART', channel: 'ws',
+      peerConnection: session.peerConnection, session, callbacks, description,
+    });
     return;
   }
   logEvent('error', 'ws',
@@ -361,6 +362,7 @@ const websocketOnMessage = (event, playSettings, peerConnection, websocket, call
         clearIceRestartTimeout(session);
         session.iceRestartPending = false;
         if (session.recovery) session.recovery.notifyRestartAnswered();
+        clearBusyIceRestarts(session);
       }
       if (message.sdp) {
         console.log("SDP Data: " + message.sdp);
@@ -382,7 +384,9 @@ const websocketOnMessage = (event, playSettings, peerConnection, websocket, call
   }
 }
 
-const websocketOnError = (error, callbacks) => {
+// extra is merged into the report: unreachable marks a socket that never opened, which
+// the supervisor waits out during an Engine restart instead of counting as a failed attempt.
+const websocketOnError = (error, callbacks, extra = {}) => {
   /*
    * Not console.log(error): the event references the socket and window, and the console keeps
    * that whole graph alive for expansion. The event also has no .message.
@@ -390,7 +394,7 @@ const websocketOnError = (error, callbacks) => {
   const message = describeSignalingError(error);
   logEvent('error', 'ws', 'play signalling failed', message);
   if (callbacks.onError)
-    callbacks.onError({message:'Websocket Error: '+message, status: error?.status});
+    callbacks.onError({message:'Websocket Error: '+message, status: error?.status, ...extra});
 }
 
 const createOfferPayload = (playSettings, session, secureToken = null) => {
@@ -551,14 +555,14 @@ const startPlay = (playSettings, callbacks) =>
           // Once the socket was open, the close event that always follows an error says more
           // (it has the code), so the loss is reported from there.
           if (session.socketOpened) return;
-          websocketOnError(error, callbacks);
+          websocketOnError(error, callbacks, { unreachable: true });
         });
 
         // The Engine going away, or ending the session with its status on the close frame.
         websocket.addEventListener ("close", (event) => {
           if (isWebSocketClosing(websocket)) return;
           if (!session.socketOpened) {
-            websocketOnError(null, callbacks);
+            websocketOnError(null, callbacks, { unreachable: true });
             return;
           }
           callbacks.onSessionLost(sessionLostFromClose(event));
@@ -588,16 +592,17 @@ const restartIceOverWhep = (peerConnection, sessionUrl, playSettings, session, c
   }))
     .then(() => {
       session.iceRestartPending = false;
+      clearBusyIceRestarts(session);
       if (session.recovery) session.recovery.notifyRestartAnswered();
     })
     .catch((e) => {
       session.iceRestartPending = false;
       if (session.closed || session.failed) return;
       if (e && e.status === ICE_RESTART_BUSY_STATUS) {
-        logEvent('warn', 'http',
-          `WHEP ICE restart answered 425: the Engine is still restarting ICE, asking again in ${ICE_RESTART_RETRY_MS / 1000} s`,
-          e.description || null);
-        if (session.recovery) session.recovery.retryRestart(ICE_RESTART_RETRY_MS, 'retry after 425');
+        retryBusyIceRestart({
+          label: 'WHEP ICE restart answered 425', channel: 'http',
+          peerConnection, session, callbacks, description: e.description,
+        });
         return;
       }
       if (session.recovery) session.recovery.notifyRestartFailed();
@@ -694,10 +699,14 @@ const startPlayWhep = async (playSettings, session, callbacks) => {
 
     const whepUrl = `${playSettings.signalingURL}/${playSettings.applicationName}/${playSettings.streamName}/whep`;
 
+    // A POST that gets no answer at all is an Engine that cannot be reached, not a refusal.
     const response = await loggedFetch(whepUrl, {
       method: "POST",
       headers: { "Content-Type": "application/sdp", ...getAuthHeaders(playSettings.authToken) },
       body: peerConnection.localDescription.sdp
+    }).catch((error) => {
+      error.unreachable = true;
+      throw error;
     });
 
     const locationHeader = response.ok ? response.headers.get("Location") : null;
@@ -723,7 +732,6 @@ const startPlayWhep = async (playSettings, session, callbacks) => {
     if (sessionUrl) {
       // From here every exit gives the resource back, the teardown included.
       session.whepSessionUrl = sessionUrl;
-      playSettings._whepSessionUrl = sessionUrl;
 
       for (const candidate of pendingCandidates) {
         await loggedFetch(sessionUrl, {

@@ -15,15 +15,39 @@ const pendingRestartOffers = new WeakSet();
 
 const markRestartRequested = (peerConnection) => pendingRestartOffers.add(peerConnection);
 
+// Peer connections whose last negotiationneeded was dropped by the gate below. The browser
+// raises the event only when its negotiation-needed flag goes from false to true, and a
+// dropped one leaves the flag up: a restart offer rolled back after a 425 is still owed, so
+// the browser re-raises negotiationneeded at once, the gate drops it (nothing was pending
+// yet), and every restartIce() after that raises nothing at all.
+const droppedNegotiations = new WeakSet();
+
 // Every onnegotiationneeded handler must gate its re-offer on this: the browser re-raises
 // negotiationneeded on every return to "stable" and answering those renegotiates forever.
 export const consumeIceRestartOffer = (peerConnection) => {
   if (!peerConnection || !pendingRestartOffers.has(peerConnection)) {
+    if (peerConnection) droppedNegotiations.add(peerConnection);
     console.log('negotiationneeded raised without a pending ICE restart: no re-offer sent.');
     return false;
   }
   pendingRestartOffers.delete(peerConnection);
+  droppedNegotiations.delete(peerConnection);
   return true;
+};
+
+// Asks for a restart offer. Where the browser will not raise negotiationneeded again (see
+// droppedNegotiations), the handler is called here instead, once the browser has had its
+// chance: whichever comes first consumes the pending restart and the other is dropped.
+const raiseIceRestart = (peerConnection) => {
+  markRestartRequested(peerConnection);
+  peerConnection.restartIce();
+  if (!droppedNegotiations.has(peerConnection)) return;
+  setTimeout(() => {
+    if (!pendingRestartOffers.has(peerConnection)) return;
+    if (peerConnection.signalingState !== 'stable') return;
+    if (typeof peerConnection.onnegotiationneeded === 'function')
+      peerConnection.onnegotiationneeded(new Event('negotiationneeded'));
+  }, 0);
 };
 
 // Attaches an oniceconnectionstatechange handler that requests an ICE restart when the
@@ -53,9 +77,8 @@ export const attachIceRestartRecovery = (peerConnection) => {
       return;
     }
     iceRestartInProgress = true;
-    markRestartRequested(peerConnection);
     console.log(`Requesting ICE restart (${reason}).`);
-    peerConnection.restartIce();
+    raiseIceRestart(peerConnection);
   };
 
   const handler = () => {
@@ -137,9 +160,8 @@ export const attachIceRestartRecovery = (peerConnection) => {
 export const triggerIceRestart = (peerConnection) => {
   if (peerConnection && typeof peerConnection.restartIce === 'function') {
     console.log('[ICE restart] Calling peerConnection.restartIce(); a new offer with fresh ICE credentials will be sent.');
-    // Arm the gate, else the negotiationneeded this raises is dropped and nothing reaches the engine.
-    markRestartRequested(peerConnection);
-    peerConnection.restartIce();
+    // Arms the gate, else the negotiationneeded this raises is dropped and nothing reaches the engine.
+    raiseIceRestart(peerConnection);
   } else {
     console.warn('[ICE restart] No active peer connection, or restartIce() is unsupported in this browser.');
   }

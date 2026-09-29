@@ -35,6 +35,52 @@ export const describeIceRestartStatus = (status, description) => {
   return 'no reason given';
 };
 
+// A busy Engine is asked again this many times in a row; after that it is not busy, it is stuck.
+export const MAX_ICE_RESTART_BUSY_RETRIES = 3;
+
+/*
+ * The Engine answered an ICE restart with 425: still busy with an earlier one. The restart
+ * offer has already been applied locally, so the connection sits in have-local-offer, and
+ * from there restartIce() never raises negotiationneeded again. The offer is rolled back to
+ * stable first, and only then is the restart asked for again; that new offer arms its own
+ * answer timer, so a retry that goes unanswered still ends as a lost session. A fourth 425 in
+ * a row is treated as a lost session too.
+ *
+ * label is the panel prefix: "publish status 425 to ICE_RESTART", "WHIP ICE restart answered 425".
+ */
+export const retryBusyIceRestart = ({ label, channel, peerConnection, session, callbacks, description }) => {
+  session.iceRestartBusyCount = (session.iceRestartBusyCount || 0) + 1;
+  const count = session.iceRestartBusyCount;
+  if (count > MAX_ICE_RESTART_BUSY_RETRIES) {
+    logEvent('error', channel,
+      `${label}: the Engine was still busy after ${MAX_ICE_RESTART_BUSY_RETRIES} retries, giving up on the restart`,
+      description || null);
+    if (session.recovery) session.recovery.notifyRestartFailed();
+    callbacks.onSessionLost({ reason: `ICE restart answered 425 ${count} times in a row`, status: ICE_RESTART_BUSY_STATUS });
+    return;
+  }
+  logEvent('warn', channel,
+    `${label}: the Engine is still restarting ICE, asking again in ${ICE_RESTART_RETRY_MS / 1000} s (retry ${count} of ${MAX_ICE_RESTART_BUSY_RETRIES})`,
+    description || null);
+  const rollBack = peerConnection && peerConnection.signalingState === 'have-local-offer'
+    ? Promise.resolve().then(() => peerConnection.setLocalDescription({ type: 'rollback' }))
+    : Promise.resolve();
+  rollBack
+    .then(() => {
+      if (session.closed || session.failed) return;
+      if (session.recovery) session.recovery.retryRestart(ICE_RESTART_RETRY_MS, `retry ${count} after 425`);
+    })
+    .catch((error) => {
+      if (session.closed || session.failed) return;
+      logEvent('error', channel, `${label}: could not roll back the restart offer`, error?.message ?? String(error));
+      if (session.recovery) session.recovery.notifyRestartFailed();
+      callbacks.onSessionLost({ reason: 'ICE restart offer could not be rolled back after a 425' });
+    });
+};
+
+/** An answered restart ends a run of busy answers. */
+export const clearBusyIceRestarts = (session) => { session.iceRestartBusyCount = 0; };
+
 /** The reason and Engine status for a signaling socket that closed without being asked to. */
 export const sessionLostFromClose = (event) => {
   const code = event?.code;

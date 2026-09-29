@@ -39,12 +39,13 @@ import {
 } from "../diagnostics/latencyProbe";
 import {
   ICE_RESTART_BUSY_STATUS,
-  ICE_RESTART_RETRY_MS,
   armIceRestartTimeout,
+  clearBusyIceRestarts,
   clearIceRestartTimeout,
   describeIceRestartStatus,
   guardAttemptCallbacks,
   logIceRestartUnanswered,
+  retryBusyIceRestart,
   sessionLostFromClose,
   withIceRestartTimeout
 } from "./sessionLoss";
@@ -460,10 +461,10 @@ const handleIceRestartStatus = (status, description, callbacks, session) => {
   clearIceRestartTimeout(session);
   session.iceRestartPending = false;
   if (status === ICE_RESTART_BUSY_STATUS) {
-    logEvent('warn', 'ws',
-      `publish status 425 to ICE_RESTART: the Engine is still restarting ICE, asking again in ${ICE_RESTART_RETRY_MS / 1000} s`,
-      description || null);
-    if (session.recovery) session.recovery.retryRestart(ICE_RESTART_RETRY_MS, 'retry after 425');
+    retryBusyIceRestart({
+      label: 'publish status 425 to ICE_RESTART', channel: 'ws',
+      peerConnection: session.peerConnection, session, callbacks, description,
+    });
     return;
   }
   logEvent('error', 'ws',
@@ -511,6 +512,7 @@ const websocketOnMessage = (event, publishSettings, websocket, peerConnection, c
       clearIceRestartTimeout(session);
       session.iceRestartPending = false;
       if (session.recovery) session.recovery.notifyRestartAnswered();
+      clearBusyIceRestarts(session);
     }
 
     if (msgJSON.message?.sdp) {
@@ -548,7 +550,9 @@ const websocketOnMessage = (event, publishSettings, websocket, peerConnection, c
   }
 }
 
-const websocketOnError = (error, callbacks) => {
+// extra is merged into the report: unreachable marks a socket that never opened, which
+// the supervisor waits out during an Engine restart instead of counting as a failed attempt.
+const websocketOnError = (error, callbacks, extra = {}) => {
   /*
    * Not console.log(error): the event references the socket and window, and the console keeps
    * that whole graph alive for expansion. The log panel takes a string.
@@ -556,7 +560,7 @@ const websocketOnError = (error, callbacks) => {
   const message = describeSignalingError(error);
   logEvent('error', 'ws', 'publish signalling failed', message);
   if (callbacks.onError)
-    callbacks.onError({ message: 'Websocket Error: ' + message, status: error?.status });
+    callbacks.onError({ message: 'Websocket Error: ' + message, status: error?.status, ...extra });
 }
 
 // startPublish
@@ -656,7 +660,7 @@ const startPublish = (publishSettings, websocket, callbacks) =>
           // Once the socket was open, the close event that always follows an error says more
           // (it has the code), so the loss is reported from there.
           if (session.socketOpened) return;
-          websocketOnError(error, callbacks);
+          websocketOnError(error, callbacks, { unreachable: true });
         });
 
         // The Engine going away, or ending the session with its status on the close frame.
@@ -665,7 +669,7 @@ const startPublish = (publishSettings, websocket, callbacks) =>
           clearTimeout(session.connectionTimeout);
           if (isWebSocketClosing(websocket)) return;
           if (!session.socketOpened) {
-            websocketOnError(null, callbacks);
+            websocketOnError(null, callbacks, { unreachable: true });
             return;
           }
           callbacks.onSessionLost(sessionLostFromClose(event));
@@ -694,16 +698,17 @@ const restartIceOverWhip = (peerConnection, sessionUrl, publishSettings, session
   }))
     .then(() => {
       session.iceRestartPending = false;
+      clearBusyIceRestarts(session);
       if (session.recovery) session.recovery.notifyRestartAnswered();
     })
     .catch((e) => {
       session.iceRestartPending = false;
       if (session.closed || session.failed) return;
       if (e && e.status === ICE_RESTART_BUSY_STATUS) {
-        logEvent('warn', 'http',
-          `WHIP ICE restart answered 425: the Engine is still restarting ICE, asking again in ${ICE_RESTART_RETRY_MS / 1000} s`,
-          e.description || null);
-        if (session.recovery) session.recovery.retryRestart(ICE_RESTART_RETRY_MS, 'retry after 425');
+        retryBusyIceRestart({
+          label: 'WHIP ICE restart answered 425', channel: 'http',
+          peerConnection, session, callbacks, description: e.description,
+        });
         return;
       }
       if (session.recovery) session.recovery.notifyRestartFailed();
@@ -812,10 +817,14 @@ const startPublishWhip = async (publishSettings, session, callbacks) => {
 
     const whipUrl = `${publishSettings.signalingURL}/${publishSettings.applicationName}/${publishSettings.streamName}/whip`;
 
+    // A POST that gets no answer at all is an Engine that cannot be reached, not a refusal.
     const response = await loggedFetch(whipUrl, {
       method: "POST",
       headers: { "Content-Type": "application/sdp", ...getAuthHeaders(publishSettings.authToken) },
       body: offerSdp
+    }).catch((error) => {
+      error.unreachable = true;
+      throw error;
     });
 
     const locationHeader = response.ok ? response.headers.get("Location") : null;
@@ -880,9 +889,6 @@ const startPublishWhip = async (publishSettings, session, callbacks) => {
 
     if (callbacks.onSetPeerConnection)
       callbacks.onSetPeerConnection({ peerConnection });
-
-    peerConnection._whipSessionUrl = sessionUrl;
-    peerConnection._whipAuthToken = publishSettings.authToken;
 
   } catch (e) {
     console.log(e.message);

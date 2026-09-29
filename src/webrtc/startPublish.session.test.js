@@ -75,6 +75,14 @@ describe('startPublish over WebSocket signaling', () => {
     expect(pc.closed).toBe(true);
   });
 
+  it('marks a socket that never opened as the Engine being unreachable', () => {
+    const ws = new FakeSocket();
+    const cb = callbacks();
+    startPublish(settings(), ws, cb);
+    ws.dispatchEvent(new Event('error'));
+    expect(cb.onError).toHaveBeenCalledWith(expect.objectContaining({ unreachable: true }));
+  });
+
   it('reads the Engine status off a 4xxx close code', async () => {
     const { ws, cb } = await goLive({ instrument: true });
     ws.serverClose(4410, 'application shut down');
@@ -120,6 +128,61 @@ describe('startPublish over WebSocket signaling', () => {
     await vi.advanceTimersByTimeAsync(2000);
     await settle();
     expect(ws.sentTypes().filter((t) => t === 'ICE_RESTART')).toHaveLength(2);
+  });
+
+  it('rolls a busy restart back to stable, so the retry can go out at all', async () => {
+    const { ws, pc } = await goLive();
+    pc.setIceState('disconnected');
+    await restartIce(pc);
+    expect(pc.signalingState).toBe('have-local-offer');
+    ws.reply({ statusCode: 425, statusDescription: 'restart in progress' });
+    await settle();
+    expect(pc.signalingState).toBe('stable');
+    expect(labels()).toContain(
+      'warn ws: publish status 425 to ICE_RESTART: the Engine is still restarting ICE, asking again in 2 s (retry 1 of 3)');
+  });
+
+  it('can restart ICE again after a busy answer on a healthy connection', async () => {
+    const { ws, pc } = await goLive();
+    await restartIce(pc);
+    ws.reply({ statusCode: 425 });
+    await settle();
+    await settle();
+    // ICE never dropped, so there is no retry of its own; the next Restart ICE must still go out.
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(ws.sentTypes().filter((t) => t === 'ICE_RESTART')).toHaveLength(1);
+    await restartIce(pc);
+    await settle();
+    expect(ws.sentTypes().filter((t) => t === 'ICE_RESTART')).toHaveLength(2);
+  });
+
+  it('gives a retried restart its own 8 s, and calls the session lost when it goes unanswered', async () => {
+    const { ws, cb, handle, pc } = await goLive();
+    pc.setIceState('disconnected');
+    await restartIce(pc);
+    ws.reply({ statusCode: 425 });
+    await vi.advanceTimersByTimeAsync(2000);
+    await settle();
+    expect(ws.sentTypes().filter((t) => t === 'ICE_RESTART')).toHaveLength(2);
+    expect(handle.isIceRestartInProgress()).toBe(true);
+    await vi.advanceTimersByTimeAsync(8000);
+    expect(cb.onSessionLost).toHaveBeenCalledWith({ reason: 'ICE restart unanswered after 8 s' });
+    expect(handle.isIceRestartInProgress()).toBe(false);
+  });
+
+  it('stops asking a busy Engine after three retries and calls the session lost', async () => {
+    const { ws, cb, pc } = await goLive();
+    pc.setIceState('disconnected');
+    await restartIce(pc);
+    for (let retry = 1; retry <= 3; retry += 1) {
+      ws.reply({ statusCode: 425 });
+      await vi.advanceTimersByTimeAsync(2000);
+      await settle();
+      expect(ws.sentTypes().filter((t) => t === 'ICE_RESTART')).toHaveLength(retry + 1);
+    }
+    ws.reply({ statusCode: 425 });
+    await settle();
+    expect(cb.onSessionLost).toHaveBeenCalledWith({ reason: 'ICE restart answered 425 4 times in a row', status: 425 });
   });
 
   it('never hands a frame to a socket that is not open, and says why', async () => {
@@ -184,6 +247,35 @@ describe('startPublish over WHIP', () => {
     expect(labels()).toContain('error http: WHIP ICE restart rejected (400): No such WHIP session');
     // The resource is given back on the way out.
     expect(fetch.mock.calls.some(([url, init]) => init.method === 'DELETE' && url.endsWith('/resource1'))).toBe(true);
+  });
+
+  it('rolls back a WHIP restart answered 425 and asks again', async () => {
+    let patches = 0;
+    vi.stubGlobal('fetch', vi.fn(async (url, init) => {
+      if (init.method === 'POST') return answer();
+      if (init.method === 'PATCH' && /ice-ufrag/.test(init.body)) {
+        patches += 1;
+        return patches === 1
+          ? new Response('busy', { status: 425 })
+          : new Response('a=ice-ufrag:remote\r\na=ice-pwd:remotepwd\r\n', { status: 200 });
+      }
+      return new Response(null, { status: 204 });
+    }));
+    const cb = callbacks();
+    startPublish(settings({ useWhip: true, signalingURL: 'https://engine.example' }), null, cb);
+    await settle();
+    await settle();
+    const pc = lastPeerConnection();
+    pc.setConnectionState('connected');
+    pc.setIceState('disconnected');
+    await restartIce(pc);
+    await settle();
+    expect(pc.signalingState).toBe('stable');
+    await vi.advanceTimersByTimeAsync(2000);
+    await settle();
+    await settle();
+    expect(patches).toBe(2);
+    expect(cb.onSessionLost).not.toHaveBeenCalled();
   });
 
   it('gives back a resource whose POST came back after the attempt was closed', async () => {
