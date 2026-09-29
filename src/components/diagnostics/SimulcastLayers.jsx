@@ -75,7 +75,7 @@ const SimulcastLayers = ({ layers, totalKbps }) => {
       <table className="wz-layers__table">
         <thead>
           <tr>
-            <th scope="col">RID</th>
+            <th scope="col">Rendition ID</th>
             <th scope="col">Size</th>
             <th scope="col">Rate</th>
             <th scope="col">FPS</th>

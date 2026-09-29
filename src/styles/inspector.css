@@ -643,3 +643,78 @@
 }
 
 .wz-info-tip[hidden] { display: none; }
+
+/* ------------------------------------------------------------------ simulcast renditions */
+
+/*
+ * Three short headers, each with its info button. At 280px a header may take two lines; the
+ * button stays after the last word rather than dropping to a line of its own.
+ */
+.wz-inspector .wz-renditions th {
+  vertical-align: bottom;
+  line-height: 1.3;
+}
+
+.wz-inspector .wz-th {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.wz-inspector .wz-th .wz-info-button { margin-bottom: 1px; }
+
+.wz-inspector .wz-renditions .wz-rendition-remove-cell {
+  width: 1%;
+  white-space: nowrap;
+}
+
+/*
+ * Remove a rendition: the panel's icon button, at the height of the fields in the row so it
+ * lines up with them, and narrow enough that the table still fits a 280px panel.
+ */
+.wz-inspector .control-button.wz-rendition-remove {
+  width: 28px;
+  height: 28px;
+  color: var(--wz-text-muted);
+}
+
+.wz-inspector .control-button.wz-rendition-remove:hover:not(:disabled) {
+  border-color: var(--wz-danger);
+  color: var(--wz-danger);
+}
+
+.wz-inspector .control-button.wz-rendition-remove:focus { outline: none; box-shadow: none; }
+
+.wz-inspector .control-button.wz-rendition-remove:focus-visible {
+  outline: 2px solid var(--wz-accent);
+  outline-offset: 2px;
+}
+
+/* Plainly off: faint, no hover, and the pointer says so. */
+.wz-inspector .control-button.wz-rendition-remove:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  border-color: var(--wz-border);
+}
+
+.wz-inspector .wz-renditions-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+
+.wz-inspector .wz-renditions-actions .wz-renditions-limit { margin: 0; }
+
+/* Read by a screen reader, not drawn. */
+.wz-sr-only {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}

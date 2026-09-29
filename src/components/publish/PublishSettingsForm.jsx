@@ -16,6 +16,14 @@ import CookieName from '../../constants/CookieName';
 import { isValidStunUrl, isValidTurnUrl, STUN_SERVER_PLACEHOLDER, TURN_SERVER_PLACEHOLDER } from '../../utils/IceServersUtils';
 import { parseSimulcastRenditions, getSimulcastRenditionsError } from '../../utils/SimulcastUtils';
 import PublishSimulcastSettings from './PublishSimulcastSettings';
+import MaxBitrateField from './MaxBitrateField';
+import { LabelWithInfo } from '../shared/InfoTip';
+import {
+  AUDIO_MAX_BITRATE_KBPS,
+  DEGRADATION_PREFERENCE_OPTIONS,
+  VIDEO_MAX_BITRATE_KBPS,
+  getMaxBitrateKbpsError,
+} from '../../utils/SenderParameters';
 import FormCheckbox from '../shared/FormCheckbox';
 import PublishDiagnosticsSettings from './PublishDiagnosticsSettings';
 import FormToggleSelect from '../shared/FormToggleSelect';
@@ -210,6 +218,13 @@ const PublishSettingsForm = ({ tab = 'connection' }) => {
     publishSettings.videoTrack
   ]);
 
+  // Worked out from the committed values, which are what the senders get. The single video
+  // cap is ignored under simulcast, so it cannot block anything there.
+  const videoMaxBitrateError = publishSettings.useSimulcast ? null
+    : getMaxBitrateKbpsError(publishSettings.videoMaxBitrateKbps, VIDEO_MAX_BITRATE_KBPS, 'Max video bitrate');
+  const audioMaxBitrateError =
+    getMaxBitrateKbpsError(publishSettings.audioMaxBitrateKbps, AUDIO_MAX_BITRATE_KBPS, 'Max audio bitrate');
+
   const setSignalingURL = (value) =>
     dispatch({ type: PublishSettingsActions.SET_PUBLISH_SIGNALING_URL, signalingURL: value });
 
@@ -278,6 +293,16 @@ const PublishSettingsForm = ({ tab = 'connection' }) => {
         });
         return;
       }
+    }
+
+    // Refused rather than published without the cap: the field already says what is wrong.
+    const limitError = videoMaxBitrateError || audioMaxBitrateError;
+    if (limitError) {
+      dispatch({
+        type: ErrorsActions.SET_ERROR_MESSAGE,
+        message: limitError
+      });
+      return;
     }
 
     // Remembered on publish, not per keystroke, so the list holds real targets.
@@ -449,8 +474,12 @@ const PublishSettingsForm = ({ tab = 'connection' }) => {
         </div>
 
         <div hidden={tab !== 'source'}>
-        {/* Inputs first: what the stream is made of, before how it gets encoded. */}
-        <div className="wz-group">Inputs</div>
+        {/* Video, then audio: each input sits with the settings that shape what it sends,
+            rather than the inputs in one group and their encoding in another. Every field
+            keeps a row of its own at the panel's narrowest; only frame rate and frame size,
+            both short, share one. The explanations are behind the info buttons, and only
+            warnings stay on screen. */}
+        <div className="wz-group">Video</div>
         <div className="row wz-inline-row">
           <div className="col-10">
             <PublishVideoDropdown />
@@ -476,6 +505,143 @@ const PublishSettingsForm = ({ tab = 'connection' }) => {
             </button>
           </div>
         </div>
+
+        <div className="row">
+          <div className="col-12">
+            <div className="mb-3">
+              <LabelWithInfo htmlFor="videoCodec" label="Video Codec" topic="Video codec">
+                The Engine application has the final say: it only accepts the codecs in its
+                PreferredCodecsVideo setting. Setting a codec here offers only that codec, so
+                if the application does not allow it, no video is sent. Leave it on Auto unless
+                a workflow needs a specific codec. Fixed once publishing starts.
+              </LabelWithInfo>
+              <select
+                className="form-select"
+                id="videoCodec"
+                name="videoCodec"
+                value={publishSettings.videoCodec}
+                disabled={webrtcPublish.connected}
+                onChange={(e) => dispatch({ type: PublishSettingsActions.SET_PUBLISH_VIDEO_CODEC, videoCodec: e.target.value })}
+              >
+                {VIDEO_CODEC_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+              {codecUnavailable ? (
+                /* Said here rather than after a failed publish: an unsupported choice is
+                   silently replaced with the full offer, so without this note the selector
+                   looks like it worked. A warning, so it stays on screen. */
+                <small className="wz-field-error" id="videoCodec-unsupported" role="alert">
+                  This browser cannot encode {publishSettings.videoCodec} for WebRTC, so the
+                  choice is ignored and the browser's full codec list is offered instead, as
+                  with Auto. H.265 needs Chrome on Windows, macOS or Android with a hardware
+                  HEVC encoder; Edge does not send it at all.
+                </small>
+              ) : codecUnrestrictable ? (
+                <small className="wz-field-error" id="videoCodec-unrestricted" role="alert">
+                  This browser cannot restrict the offer to one codec (it has no
+                  RTCRtpTransceiver.setCodecPreferences), so the choice is ignored and the
+                  browser's full codec list is offered instead, as with Auto.
+                </small>
+              ) : null}
+            </div>
+          </div>
+        </div>
+        <div className="row wz-split-row">
+          <div className="col-lg-6 col-sm-12">
+            <div className="mb-3">
+              <LabelWithInfo htmlFor="videoFrameRate" label="Frame Rate" topic="Frame rate">
+                The frame rate asked of the camera, as an ideal rather than a requirement: the
+                camera delivers the closest rate it has, which may be lower. It sets the
+                capture, not the encoder, which can drop frames further when bandwidth is
+                short. Can change while live.
+              </LabelWithInfo>
+              <div className="input-group">
+                <input
+                  type="number"
+                  className="form-control"
+                  id="videoFrameRate"
+                  name="videoFrameRate"
+                  value={publishSettings.videoFrameRate}
+                  onChange={(e) => dispatch({ type: PublishSettingsActions.SET_PUBLISH_VIDEO_FRAME_SIZE_AND_RATE, videoFrameRate: e.target.value })}
+                />
+                <span className="input-group-text">fps</span>
+              </div>
+            </div>
+          </div>
+          <div className="col-lg-6 col-sm-12">
+            <div className="mb-3">
+              <LabelWithInfo htmlFor="frameSize" label="Frame Size" topic="Frame size">
+                The picture size asked of the camera. Default asks for 1280x720 and takes the
+                closest size the camera has. A named size must be exact: a camera that cannot
+                capture it reports an error and the setting goes back to Default. Can change
+                while live.
+              </LabelWithInfo>
+              <div className="input-group">
+                <select
+                  className="form-select"
+                  id="frameSize"
+                  name="frameSize"
+                  value={publishSettings.videoFrameSize}
+                  onChange={(e) => dispatch({ type: PublishSettingsActions.SET_PUBLISH_VIDEO_FRAME_SIZE_AND_RATE, videoFrameSize: e.target.value })}
+                >
+                  {PublishOptions.videoFrameSizes.map((frameSize, key) => {
+                    return <option key={key} value={frameSize.value}>{frameSize.name}</option>
+                  })}
+                </select>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* With simulcast on, each rendition carries its own cap, so this one would be
+            ignored; disabled with the reason rather than hidden, so nothing reflows. */}
+        <MaxBitrateField
+          id="videoMaxBitrate"
+          label="Max video bitrate"
+          value={publishSettings.videoMaxBitrateKbps}
+          error={videoMaxBitrateError}
+          disabled={publishSettings.useSimulcast}
+          note={publishSettings.useSimulcast ? 'Set per rendition under Simulcast.' : null}
+          onCommit={(videoMaxBitrateKbps) => dispatch({ type: PublishSettingsActions.SET_PUBLISH_VIDEO_MAX_BITRATE, videoMaxBitrateKbps })}
+        >
+          The most the video may send, in kilobits per second (1000 kbps is 1 Mbps), from{' '}
+          {VIDEO_MAX_BITRATE_KBPS.min} to {VIDEO_MAX_BITRATE_KBPS.max}. Blank leaves it to the
+          browser, which adapts to the network. The encoder stays under the cap and uses less
+          when the picture is simple. Applies to a single stream: with simulcast on, each
+          rendition has its own Max (kbps). Can change while live.
+        </MaxBitrateField>
+
+        <div className="row">
+          <div className="col-12">
+            <div className="mb-3">
+              <LabelWithInfo htmlFor="degradationPreference" label="When bandwidth is short">
+                What the encoder gives up first when the picture does not fit the bitrate
+                available. Keep frame rate lowers the resolution; Keep resolution lowers the
+                frame rate; Balanced trades one against the other. Browser default sends no
+                preference and lets the browser choose. Chrome and Edge honor this; other
+                browsers may ignore it. Applies with simulcast too, and can change while live.
+              </LabelWithInfo>
+              <select
+                className="form-select"
+                id="degradationPreference"
+                name="degradationPreference"
+                value={publishSettings.degradationPreference}
+                onChange={(e) => dispatch({ type: PublishSettingsActions.SET_PUBLISH_DEGRADATION_PREFERENCE, degradationPreference: e.target.value })}
+              >
+                {DEGRADATION_PREFERENCE_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <PublishSimulcastSettings />
+
+        <div className="wz-rule" />
+
+        <div className="wz-group">Audio</div>
         <div className="row wz-inline-row">
           <div className="col-10">
             <PublishAudioDropdown />
@@ -497,91 +663,19 @@ const PublishSettingsForm = ({ tab = 'connection' }) => {
             </button>
           </div>
         </div>
-        <div className="wz-rule" />
 
-        <div className="wz-group">Encoding</div>
-        <div className="row">
-          <div className="col-12">
-            <div className="mb-3">
-              <label htmlFor="videoCodec">Video Codec</label>
-              <select
-                className="form-select"
-                id="videoCodec"
-                name="videoCodec"
-                value={publishSettings.videoCodec}
-                disabled={webrtcPublish.connected}
-                onChange={(e) => dispatch({ type: PublishSettingsActions.SET_PUBLISH_VIDEO_CODEC, videoCodec: e.target.value })}
-              >
-                {VIDEO_CODEC_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value}>{o.label}</option>
-                ))}
-              </select>
-              {codecUnavailable ? (
-                /* Said here rather than after a failed publish: an unsupported choice is
-                   silently replaced with the full offer, so without this note the selector
-                   looks like it worked. */
-                <small className="wz-field-error" id="videoCodec-unsupported" role="alert">
-                  This browser cannot encode {publishSettings.videoCodec} for WebRTC, so the
-                  choice is ignored and the browser's full codec list is offered instead, as
-                  with Auto. H.265 needs Chrome on Windows, macOS or Android with a hardware
-                  HEVC encoder; Edge does not send it at all.
-                </small>
-              ) : codecUnrestrictable ? (
-                <small className="wz-field-error" id="videoCodec-unrestricted" role="alert">
-                  This browser cannot restrict the offer to one codec (it has no
-                  RTCRtpTransceiver.setCodecPreferences), so the choice is ignored and the
-                  browser's full codec list is offered instead, as with Auto.
-                </small>
-              ) : (
-                <small className="form-text text-muted">
-                  The Engine application has the final say: it only accepts the codecs in
-                  its PreferredCodecsVideo setting. Setting a codec here offers only that
-                  codec, so if the application does not allow it, no video is sent. Leave
-                  it on Auto unless a workflow needs a specific codec.
-                </small>
-              )}
-            </div>
-          </div>
-        </div>
-        <div className="row wz-split-row">
-          <div className="col-lg-6 col-sm-12">
-            <div className="mb-3">
-              <label htmlFor="videoFrameRate">Frame Rate</label>
-              <div className="input-group">
-                <input
-                  type="number"
-                  className="form-control"
-                  id="videoFrameRate"
-                  name="videoFrameRate"
-                  value={publishSettings.videoFrameRate}
-                  onChange={(e) => dispatch({ type: PublishSettingsActions.SET_PUBLISH_VIDEO_FRAME_SIZE_AND_RATE, videoFrameRate: e.target.value })}
-                />
-                <span className="input-group-text">fps</span>
-              </div>
-            </div>
-          </div>
-          <div className="col-lg-6 col-sm-12">
-            <div className="mb-3">
-              <label htmlFor="frameSize">Frame Size</label>
-              <div className="input-group">
-                <select
-                  className="form-select"
-                  id="frameSize"
-                  name="frameSize"
-                  value={publishSettings.videoFrameSize}
-                  onChange={(e) => dispatch({ type: PublishSettingsActions.SET_PUBLISH_VIDEO_FRAME_SIZE_AND_RATE, videoFrameSize: e.target.value })}
-                >
-                  {PublishOptions.videoFrameSizes.map((frameSize, key) => {
-                    return <option key={key} value={frameSize.value}>{frameSize.name}</option>
-                  })}
-                </select>
-              </div>
-            </div>
-          </div>
-        </div>
-        <div className="wz-rule" />
-
-        <PublishSimulcastSettings />
+        <MaxBitrateField
+          id="audioMaxBitrate"
+          label="Max audio bitrate"
+          value={publishSettings.audioMaxBitrateKbps}
+          error={audioMaxBitrateError}
+          onCommit={(audioMaxBitrateKbps) => dispatch({ type: PublishSettingsActions.SET_PUBLISH_AUDIO_MAX_BITRATE, audioMaxBitrateKbps })}
+        >
+          The most the audio may send, in kilobits per second, from{' '}
+          {AUDIO_MAX_BITRATE_KBPS.min} to {AUDIO_MAX_BITRATE_KBPS.max}. A cap can only lower
+          the bitrate: the browser's Opus encoder runs at roughly 32 kbps by default, so a
+          higher cap has no effect. Blank leaves it to the browser. Can change while live.
+        </MaxBitrateField>
         </div>
 
         <div hidden={tab !== 'advanced'}>

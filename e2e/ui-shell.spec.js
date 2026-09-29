@@ -817,7 +817,7 @@ test.describe('assets', () => {
 
     const add = page.getByRole('button', { name: /Add rendition/ });
     await expect(add.locator('svg.wz-icon')).toHaveCount(1);
-    await expect(page.locator('button[title="Remove rendition"] svg.wz-icon').first()).toBeVisible();
+    await expect(page.locator('button[aria-label^="Remove rendition"] svg.wz-icon').first()).toBeVisible();
 
     // The glyphs are painted, not empty boxes.
     const box = await add.locator('svg.wz-icon').boundingBox();
