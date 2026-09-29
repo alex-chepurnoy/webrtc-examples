@@ -11,7 +11,7 @@ import { clearLog, getEntries } from '../diagnostics/signalLog';
 
 const labels = () => getEntries().map((e) => `${e.direction} ${e.channel}: ${e.label}`);
 
-const setup = ({ monitors = [], readLive, isWaitingForStream } = {}) => {
+const setup = ({ monitors = [], readLive, isWaitingForStream, checkAttempt } = {}) => {
   const attempts = [];
   const startAttempt = vi.fn((settings, callbacks) => {
     const handle = { close: vi.fn(), isIceRestartInProgress: () => false };
@@ -25,6 +25,7 @@ const setup = ({ monitors = [], readLive, isWaitingForStream } = {}) => {
     monitors,
     words: { lost: 'republishing', attempt: 'republish attempt' },
     isWaitingForStream,
+    checkAttempt,
     random: () => 0.5,
   });
   const start = () => supervisor.start({
@@ -245,13 +246,13 @@ describe('sessionSupervisor', () => {
       for (let index = 1; index <= 7; index += 1) {
         t.attempts[index].callbacks.onError(notRunning);
         expect(t.ui.onReconnecting).toHaveBeenLastCalledWith(
-          { attempt: 1, max: 6, reason: 'no media received for 10 s', waiting: true });
+          { attempt: 1, max: 6, reason: 'no media received for 10 s', waiting: 'stream' });
         vi.advanceTimersByTime(15_000);
         expect(t.startAttempt).toHaveBeenCalledTimes(index + 2);
       }
       expect(labels()).toContain('warn pc: publish waiting for stream "cam" to come back (1 s of 120 s)');
       expect(labels()).toContain('warn pc: publish waiting for stream "cam" to come back (91 s of 120 s)');
-      expect(labels()).toContain('info pc: publish republish attempt 1, asking again for stream "cam"');
+      expect(labels()).toContain('info pc: publish republish attempt 1, asking again');
       expect(t.supervisor.active).toBe(true);
 
       // 106 s in: another 15 s would pass the limit, so this is the end.
@@ -276,5 +277,77 @@ describe('sessionSupervisor', () => {
       t.connect(3);
       expect(labels()).toContain('info pc: publish recovered after 2 attempts (18 s)');
     });
+  });
+
+  it('does not let a session that connects and dies at once recover forever', () => {
+    const t = setup();
+    t.start();
+    t.connect(0);
+    const delays = [1000, 2000, 4000, 8000, 15000, 15000];
+    for (let index = 0; index < 6; index += 1) {
+      t.attempts[index].callbacks.onSessionLost({ reason: 'socket closed' });
+      vi.advanceTimersByTime(delays[index]);
+      t.connect(index + 1);
+      vi.advanceTimersByTime(5000);
+    }
+    t.attempts[6].callbacks.onSessionLost({ reason: 'socket closed' });
+    expect(t.supervisor.active).toBe(false);
+    expect(t.ui.onFailed).toHaveBeenCalledWith('Lost the session with the Engine: socket closed. Gave up after 6 attempts.');
+  });
+
+  it('starts the count again once a recovered session has stayed up 30 s', () => {
+    const t = setup();
+    t.start();
+    t.connect(0);
+    t.attempts[0].callbacks.onSessionLost({ reason: 'socket closed' });
+    vi.advanceTimersByTime(1000);
+    t.connect(1);
+    vi.advanceTimersByTime(30_000);
+    t.attempts[1].callbacks.onSessionLost({ reason: 'socket closed' });
+    expect(t.ui.onReconnecting).toHaveBeenLastCalledWith({ attempt: 1, max: 6, reason: 'socket closed' });
+  });
+
+  it('waits up to 2 minutes for an Engine that cannot be reached, without spending attempts', () => {
+    const t = setup();
+    t.start();
+    t.connect(0);
+    t.attempts[0].callbacks.onSessionLost({ reason: 'signaling socket closed unexpectedly (code 1006)' });
+    vi.advanceTimersByTime(1000);
+    for (let index = 1; index <= 7; index += 1) {
+      t.attempts[index].callbacks.onError({ message: 'Websocket Error: unreachable', unreachable: true });
+      expect(t.ui.onReconnecting).toHaveBeenLastCalledWith(expect.objectContaining({ attempt: 1, waiting: 'engine' }));
+      vi.advanceTimersByTime(15_000);
+    }
+    expect(labels()).toContain('warn pc: publish waiting for the Engine to be reachable again (1 s of 120 s)');
+    t.attempts[8].callbacks.onError({ message: 'Websocket Error: unreachable', unreachable: true });
+    expect(t.supervisor.active).toBe(false);
+    expect(t.ui.onFailed).toHaveBeenCalledWith(
+      'Lost the session with the Engine: signaling socket closed unexpectedly (code 1006). The Engine was not reachable again within 2 minutes.');
+  });
+
+  it('stops instead of starting a replacement the settings cannot carry', () => {
+    let ended = false;
+    const t = setup({
+      checkAttempt: () => (ended ? { reason: 'the camera was released', message: 'Publish stopped.' } : null),
+    });
+    t.start();
+    t.connect(0);
+    ended = true;
+    t.attempts[0].callbacks.onSessionLost({ reason: 'socket closed' });
+    vi.advanceTimersByTime(1000);
+    expect(t.startAttempt).toHaveBeenCalledTimes(1);
+    expect(t.supervisor.active).toBe(false);
+    expect(t.ui.onFailed).toHaveBeenCalledWith('Publish stopped.');
+    expect(labels()).toContain('error pc: publish stopped instead of starting republish attempt 1: the camera was released');
+  });
+});
+
+describe('publishSupervisor', () => {
+  it('will not republish tracks the Publish page has released', async () => {
+    const { endedTracksProblem } = await import('./publishSupervisor');
+    expect(endedTracksProblem({ audioTrack: { readyState: 'live' }, videoTrack: { readyState: 'live' } })).toBeNull();
+    expect(endedTracksProblem({ audioTrack: null, videoTrack: null })).toBeNull();
+    expect(endedTracksProblem({ audioTrack: { readyState: 'live' }, videoTrack: { readyState: 'ended' } }))
+      .toMatchObject({ reason: 'camera released when the Publish page closed' });
   });
 });

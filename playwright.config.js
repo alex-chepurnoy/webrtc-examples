@@ -52,7 +52,9 @@ export default defineConfig({
 
   webServer: {
     // Build first: preview serves an existing output folder and errors on a fresh clone.
-    command: `npm run build && npm run preview -- --port ${PORT} --strictPort`,
+    // The e2e mode is a production build in every way but one: the reconnect suites can
+    // shorten the reconnect timings (window.__wzReconnectTimings), which a real build ignores.
+    command: `npm run build -- --mode e2e && npm run preview -- --port ${PORT} --strictPort`,
     port: PORT,
     reuseExistingServer: true,
     timeout: 120_000,

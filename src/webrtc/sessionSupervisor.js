@@ -39,22 +39,49 @@ const JITTER = 0.2;
 const TERMINAL_STATUSES = new Set([401, 403, 404]);
 
 /*
- * A replay that finds the stream not running yet has not failed: its publisher is on its own
- * way back, and after an application restart the publisher needs up to a minute to notice.
- * Those answers are asked again at this cadence, for up to this long after the loss, without
- * spending the attempts, which are kept for failures of the connection itself.
+ * Two failures of a replacement are waited out rather than counted: a stream that is not
+ * running yet (its publisher is on its own way back, and after an application restart the
+ * publisher needs up to a minute to notice), and an Engine that cannot be reached at all
+ * (it is restarting). Both are asked again at this cadence, for up to this long after the
+ * loss, without spending the attempts, which are kept for failures of the connection itself.
  */
 export const WAIT_FOR_STREAM_RETRY_MS = 15000;
 export const WAIT_FOR_STREAM_LIMIT_MS = 120000;
 
 /*
+ * A recovered session counts as working again only once it has stayed up this long. Until
+ * then a new loss carries on the same count, so a session that connects and dies at once
+ * cannot recover forever.
+ */
+export const STABLE_AFTER_MS = 30000;
+
+// What a wait is for, as the panel, the badge and the final error name it.
+const WAITS = {
+  stream: {
+    what: (name) => `stream "${name}" to come back`,
+    giveUp: (name, limit) => `stream "${name}" did not come back within ${limit}`,
+    message: (minutes) => `The stream did not come back within ${minutes} minutes.`,
+  },
+  engine: {
+    what: () => 'the Engine to be reachable again',
+    giveUp: (name, limit) => `the Engine was not reachable again within ${limit}`,
+    message: (minutes) => `The Engine was not reachable again within ${minutes} minutes.`,
+  },
+};
+
+// The e2e build is not a production build; only there, and in the unit tests, may the
+// timings be shortened. A deployed page always runs on the real ones.
+const TIMINGS_OVERRIDABLE = import.meta.env.MODE !== 'production';
+
+/*
  * The timings, overridable from window.__wzReconnectTimings. For the end-to-end tests only:
  * a real application restart takes a liveness check a minute to notice, and a test cannot
- * wait that long for every case. Unknown keys and bad values fall back to the defaults.
+ * wait that long for every case. Ignored in a production build. Unknown keys and bad values
+ * fall back to the defaults.
  */
 export const reconnectTiming = (key, fallback) => {
   try {
-    const overrides = typeof window === 'undefined' ? null : window.__wzReconnectTimings;
+    const overrides = !TIMINGS_OVERRIDABLE || typeof window === 'undefined' ? null : window.__wzReconnectTimings;
     const value = overrides ? overrides[key] : undefined;
     if (Array.isArray(fallback))
       return Array.isArray(value) && value.length > 0 && value.every((n) => Number.isFinite(n) && n >= 0)
@@ -80,7 +107,11 @@ const plural = (count, word) => `${count} ${word}${count === 1 ? '' : 's'}`;
  *               They get { settings, handle, reportLost(info) }.
  * words:        { lost, attempt } for the panel: "republishing" / "republish attempt"
  * isWaitingForStream: (failure) => true for a failure that means the stream is not running
- *               yet (the player's 502 and 514), which is waited for instead of counted
+ *               yet (the player's 502 and 514), which is waited for instead of counted.
+ *               A failure with unreachable set (no connection to the Engine at all) is
+ *               waited for the same way, in both roles.
+ * checkAttempt: (settings) => null, or { reason, message } to stop instead of starting a
+ *               replacement with these settings
  */
 export const createSessionSupervisor = ({
   role,
@@ -88,6 +119,7 @@ export const createSessionSupervisor = ({
   monitors = [],
   words = { lost: 'reconnecting', attempt: 'reconnect attempt' },
   isWaitingForStream = () => false,
+  checkAttempt = () => null,
   now = () => Date.now(),
   random = Math.random,
 }) => {
@@ -99,6 +131,7 @@ export const createSessionSupervisor = ({
   let current = null;
   let attempt = 0;
   let lostAt = 0;
+  let liveSince = 0;
   let lostReason = '';
   let backoffTimer = null;
   let connectTimer = null;
@@ -163,29 +196,29 @@ export const createSessionSupervisor = ({
       : `Lost the session with the Engine: ${reason}. Gave up after ${plural(attempts, 'attempt')}.`);
   };
 
-  // Asks again for a stream that is not running yet; the attempt count stays where it is.
-  const waitForStream = (reason) => {
+  // Asks again for a stream that is not running yet, or an Engine that cannot be reached; the
+  // attempt count stays where it is.
+  const waitFor = (kind, reason) => {
+    const wait = WAITS[kind];
     const limit = reconnectTiming('waitLimitMs', WAIT_FOR_STREAM_LIMIT_MS);
     const cadence = reconnectTiming('waitRetryMs', WAIT_FOR_STREAM_RETRY_MS);
     const waited = now() - lostAt;
     const streamName = context && context.settings ? context.settings.streamName : '';
     if (waited + cadence > limit) {
-      logEvent('error', 'pc',
-        `${role} recovery gave up: stream "${streamName}" did not come back within ${formatSeconds(limit)}`,
+      logEvent('error', 'pc', `${role} recovery gave up: ${wait.giveUp(streamName, formatSeconds(limit))}`,
         { lostBecause: lostReason, lastFailure: reason });
       finish();
-      ui('onFailed', `Lost the session with the Engine: ${lostReason}. `
-        + `The stream did not come back within ${Math.round(limit / 60000)} minutes.`);
+      ui('onFailed', `Lost the session with the Engine: ${lostReason}. ${wait.message(Math.round(limit / 60000))}`);
       return;
     }
     logEvent('warn', 'pc',
-      `${role} waiting for stream "${streamName}" to come back (${Math.round(waited / 1000)} s of ${Math.round(limit / 1000)} s)`,
+      `${role} waiting for ${wait.what(streamName)} (${Math.round(waited / 1000)} s of ${Math.round(limit / 1000)} s)`,
       { lastAnswer: reason, askingAgainIn: formatSeconds(cadence) });
-    ui('onReconnecting', { attempt, max: MAX_RECONNECT_ATTEMPTS, reason: lostReason, waiting: true });
+    ui('onReconnecting', { attempt, max: MAX_RECONNECT_ATTEMPTS, reason: lostReason, waiting: kind });
     backoffTimer = setTimeout(() => {
       backoffTimer = null;
       if (!active) return;
-      logEvent('info', 'pc', `${role} ${words.attempt} ${attempt}, asking again for stream "${streamName}"`, null);
+      logEvent('info', 'pc', `${role} ${words.attempt} ${attempt}, asking again`, null);
       launch();
     }, cadence);
   };
@@ -228,15 +261,19 @@ export const createSessionSupervisor = ({
       phase = 'reconnecting';
       lostAt = now();
       lostReason = reason;
-      attempt = 0;
+      // A session that stayed up counts as working again; one that died soon after a
+      // recovery carries on the same count.
+      if (now() - liveSince >= reconnectTiming('stableMs', STABLE_AFTER_MS)) attempt = 0;
       if (info.terminal) { giveUp(reason, reason, true); return; }
+      if (attempt >= MAX_RECONNECT_ATTEMPTS) { giveUp(reason, reason, false); return; }
       schedule((next) => `${role} session lost (${reason}): ${words.lost}, ${next}`);
       return;
     }
 
     // One of the replacements failed.
     if (info.terminal || TERMINAL_STATUSES.has(info.status)) { giveUp(lostReason, reason, true); return; }
-    if (isWaitingForStream(info)) { waitForStream(reason); return; }
+    if (isWaitingForStream(info)) { waitFor('stream', reason); return; }
+    if (info.unreachable) { waitFor('engine', reason); return; }
     if (attempt >= MAX_RECONNECT_ATTEMPTS) { giveUp(lostReason, reason, false); return; }
     const failedAttempt = attempt;
     schedule((next) => `${role} ${words.attempt} ${failedAttempt} failed (${reason}): ${next}`);
@@ -251,7 +288,7 @@ export const createSessionSupervisor = ({
       ui('onReconnecting', null);
     }
     phase = 'live';
-    attempt = 0;
+    liveSince = now();
 
     // Once per attempt: an ICE blip goes disconnected and back to connected on the same one.
     if (monitoredGeneration === gen) return;
@@ -273,6 +310,15 @@ export const createSessionSupervisor = ({
     const gen = ++generation;
     const isCurrent = () => active && gen === generation && failedGeneration !== gen;
     const settings = { ...context.settings, ...(context.readLive ? context.readLive() : {}) };
+
+    // A replacement must be able to work with what it is given now, or it is better not made.
+    const problem = phase === 'reconnecting' ? checkAttempt(settings) : null;
+    if (problem) {
+      logEvent('error', 'pc', `${role} stopped instead of starting ${words.attempt} ${attempt}: ${problem.reason}`, null);
+      finish();
+      ui('onFailed', problem.message);
+      return;
+    }
     const own = (context.makeCallbacks ? context.makeCallbacks() : null) || {};
 
     const callbacks = {};
@@ -290,6 +336,7 @@ export const createSessionSupervisor = ({
         reason: error?.message ?? String(error),
         message: error?.message ?? String(error),
         status: error?.status,
+        unreachable: Boolean(error?.unreachable),
       });
     };
     callbacks.onSessionLost = (lost) => {
