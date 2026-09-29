@@ -46,7 +46,7 @@ const PublishDiagnosticsSettings = () => {
               label="Latency Probe (frame stamp)"
               id="publishLatencyProbe"
               checked={publishSettings.latencyProbe}
-              disabled={webrtcPublish.connected || probeBlockedReason !== null}
+              disabled={webrtcPublish.connected || webrtcPublish.reconnecting != null || probeBlockedReason !== null}
               onChange={(e) => dispatch({
                 type: PublishSettingsActions.SET_PUBLISH_LATENCY_PROBE,
                 latencyProbe: e.target.checked,

@@ -4,3 +4,6 @@ export const SET_WEBRTC_PLAY_CONNECTED="SET_WEBRTC_PLAY_CONNECTED";
 export const SET_WEBRTC_PLAY_AUDIO_TRACK='SET_WEBRTC_PLAY_AUDIO_TRACK';
 export const SET_WEBRTC_PLAY_VIDEO_TRACK='SET_WEBRTC_PLAY_VIDEO_TRACK';
 export const SET_WEBRTC_PLAY_STREAM='SET_WEBRTC_PLAY_STREAM';
+
+// { attempt, max, reason } while the session supervisor is replacing a lost session, else null.
+export const SET_WEBRTC_PLAY_RECONNECTING='SET_WEBRTC_PLAY_RECONNECTING';

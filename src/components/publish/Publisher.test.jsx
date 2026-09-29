@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { StrictMode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render } from '@testing-library/react';
 import { Provider } from 'react-redux';
@@ -8,6 +8,13 @@ import rootReducer from '../../reducers/rootReducer';
 import * as PublishSettingsActions from '../../actions/publishSettingsActions';
 import * as WebRTCPublishActions from '../../actions/webrtcPublishActions';
 import Publisher from './Publisher';
+import startPublish from '../../webrtc/startPublish';
+import publishSupervisor from '../../webrtc/publishSupervisor';
+
+// No real connection is made here: the supervisor's attempts are recorded instead.
+vi.mock('../../webrtc/startPublish', () => ({
+  default: vi.fn(() => ({ close: vi.fn(), isIceRestartInProgress: () => false })),
+}));
 
 /*
  * The sender limits as the Publisher applies them: one effect per sender, run on connect and
@@ -149,5 +156,43 @@ describe('Publisher sender limits', () => {
     connect(store, { video, audio: null });
     await flush();
     expect(JSON.stringify(store.getState().errors)).toContain('Could not apply the video limits: refused');
+  });
+});
+
+describe('Publisher session', () => {
+  afterEach(() => {
+    publishSupervisor.stop();
+    startPublish.mockClear();
+  });
+
+  it('starts one session under the StrictMode double mount', () => {
+    const store = makeStore();
+    // Already asked for when the component mounts, so both effect passes see the request.
+    act(() => { store.dispatch(PublishSettingsActions.startPublish()); });
+    render(<StrictMode><Provider store={store}><Publisher /></Provider></StrictMode>);
+    expect(startPublish).toHaveBeenCalledTimes(1);
+    expect(store.getState().publishSettings.publishStart).toBe(false);
+    expect(publishSupervisor.active).toBe(true);
+  });
+
+  it('shows the reconnect in the store and stops it on Stop, although nothing is connected', async () => {
+    const store = makeStore();
+    render(<Provider store={store}><Publisher /></Provider>);
+    act(() => { store.dispatch(PublishSettingsActions.startPublish()); });
+    const callbacks = startPublish.mock.calls[0][2];
+    act(() => { callbacks.onConnectionStateChange({ connected: true, state: 'connected' }); });
+    act(() => { callbacks.onSessionLost({ reason: 'signaling socket closed unexpectedly (code 1006)' }); });
+
+    const { webrtcPublish } = store.getState();
+    expect(webrtcPublish.connected).toBe(false);
+    expect(webrtcPublish.reconnecting).toEqual({
+      attempt: 1, max: 6, reason: 'signaling socket closed unexpectedly (code 1006)',
+    });
+
+    act(() => { store.dispatch(PublishSettingsActions.stopPublish()); });
+    expect(publishSupervisor.active).toBe(false);
+    expect(store.getState().webrtcPublish.reconnecting).toBeNull();
+    await act(async () => { await new Promise((r) => setTimeout(r, 1400)); });
+    expect(startPublish).toHaveBeenCalledTimes(1);
   });
 });

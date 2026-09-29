@@ -5,7 +5,9 @@ const initialState = {
   peerConnection: undefined,
   peerConnectionVideoSender: undefined,
   peerConnectionAudioSender: undefined,
-  connected: false
+  connected: false,
+  // { attempt, max, reason } while a lost session is being replaced (publishSupervisor), else null.
+  reconnecting: null
 }
 
 const webrtcPublishReducer = (state = initialState, action) => {
@@ -20,6 +22,8 @@ const webrtcPublishReducer = (state = initialState, action) => {
       return { ...state, peerConnectionAudioSender:action.peerConnectionAudioSender};
     case WebRTCPublishActions.SET_WEBRTC_PUBLISH_PEERCONNECTION_VIDEO_SENDER:
       return { ...state, peerConnectionVideoSender:action.peerConnectionVideoSender};
+    case WebRTCPublishActions.SET_WEBRTC_PUBLISH_RECONNECTING:
+      return { ...state, reconnecting: action.reconnecting ?? null };
     default:
       return state
   }

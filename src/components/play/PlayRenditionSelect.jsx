@@ -51,7 +51,8 @@ const describeLookup = (lookup, streamName, rids) => {
 const PlayRenditionSelect = () => {
   const dispatch = useDispatch();
   const playSettings = useSelector((state) => state.playSettings);
-  const { connected } = useSelector((state) => state.webrtcPlay);
+  // Locked while a session holds the name, reconnecting included: the replay uses it.
+  const connected = useSelector((state) => state.webrtcPlay.connected || state.webrtcPlay.reconnecting != null);
   // The rids this page's own publisher uses, beyond the default ladder.
   const publishRenditions = useSelector((state) => state.publishSettings?.simulcastRenditions);
   const rids = Array.isArray(publishRenditions) ? publishRenditions.map((r) => r.rid) : [];

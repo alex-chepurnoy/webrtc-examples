@@ -17,7 +17,8 @@ const FIELDS = [
 const CopyFromPublisher = () => {
   const dispatch = useDispatch();
   const publishSettings = useSelector((state) => state.publishSettings);
-  const { connected } = useSelector((state) => state.webrtcPlay);
+  // Reconnecting counts as held: the replay reuses the settings taken at Play.
+  const connected = useSelector((state) => state.webrtcPlay.connected || state.webrtcPlay.reconnecting != null);
   const [copied, setCopied] = useState(false);
   // Held so it can be canceled: switching sides unmounts this component.
   const confirmTimer = useRef(null);

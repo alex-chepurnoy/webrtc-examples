@@ -117,7 +117,8 @@ const PublishSimulcastSettings = () => {
   const simulcastDisabled = !publishSettings.useSimulcast;
   // Locked from the moment Publish is pressed, not only once connected: the offer is built
   // from these while the session is starting, and a change then would not match it.
-  const publishing = webrtcPublish.connected || publishSettings.publishStarting;
+  const publishing = webrtcPublish.connected || webrtcPublish.reconnecting != null
+    || publishSettings.publishStarting;
   const setupLocked = simulcastDisabled || publishing;
   const atLimit = renditions.length >= MAX_SIMULCAST_RENDITIONS;
 

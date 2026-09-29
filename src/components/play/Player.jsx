@@ -9,104 +9,127 @@ import * as DataChannelActions from '../../actions/dataChannelActions';
 import { describeReceivedMessage } from '../../utils/DataChannelUtils';
 import { CHAT_CHANNEL_LABEL, CAPTIONS_CHANNEL_LABEL, DATA_CHANNELS_UNAVAILABLE_MESSAGE } from '../../webrtc/attachDataChannel';
 
-import startPlay from '../../webrtc/startPlay';
-import stopPlay from '../../webrtc/stopPlay';
+import playSupervisor from '../../webrtc/playSupervisor';
 
 const Player = () => {
 
   const videoElement = useRef(null);
   const maxWidthRef = useRef(0);
-  const peerConnectionRef = useRef(undefined);
-  const websocketRef = useRef(undefined);
   const [videoSize, setVideoSize] = useState({ width: 0, height: 0 });
 
   const dispatch = useDispatch();
   const playSettings = useSelector ((state) => state.playSettings);
-  const { peerConnection, websocket, connected, stream } = useSelector ((state) => state.webrtcPlay);
+  const { connected, stream, reconnecting } = useSelector ((state) => state.webrtcPlay);
 
   // Listen for changes in the play* flags in the playSettings store
   // and stop or stop playback accordingly
 
   useEffect(() => {
 
-    const stopCallbacks = {
-      onSetPeerConnection: (result) => {
-        peerConnectionRef.current = result.peerConnection;
-        dispatch({type:WebRTCPlayActions.SET_WEBRTC_PLAY_PEERCONNECTION,peerConnection:result.peerConnection});
-      },
-      onSetWebsocket: (result) => {
-        websocketRef.current = result.websocket;
-        dispatch({type:WebRTCPlayActions.SET_WEBRTC_PLAY_WEBSOCKET,websocket:result.websocket});
-      },
-      onPlayStopped: () => {
-        // Clearing the stream detaches it from whichever player is mounted (see below).
-        dispatch({type:WebRTCPlayActions.SET_WEBRTC_PLAY_STREAM,stream:undefined});
-        dispatch({type:WebRTCPlayActions.SET_WEBRTC_PLAY_CONNECTED,connected:false});
-        dispatch(DataChannelActions.resetDataChannel('play'));
-      }
+    // The session belongs to the supervisor, not to this component: it outlives a page change
+    // and a StrictMode remount, and start() is a no-op while one is running.
+    const clearSession = () => {
+      // Clearing the stream detaches it from whichever player is mounted (see below).
+      dispatch({type:WebRTCPlayActions.SET_WEBRTC_PLAY_STREAM,stream:undefined});
+      dispatch({type:WebRTCPlayActions.SET_WEBRTC_PLAY_CONNECTED,connected:false});
+      dispatch({type:WebRTCPlayActions.SET_WEBRTC_PLAY_PEERCONNECTION,peerConnection:undefined});
+      dispatch({type:WebRTCPlayActions.SET_WEBRTC_PLAY_WEBSOCKET,websocket:undefined});
+      dispatch(DataChannelActions.resetDataChannel('play'));
     };
 
-    if (playSettings.playStart && !playSettings.playStarting && !connected)
+    if (playSettings.playStart && !playSettings.playStarting && !connected && !playSupervisor.active)
     {
       dispatch({type:PlaySettingsActions.SET_PLAY_FLAGS, playStart:false, playStarting:true});
-      // One stream per session, published to the store on its first track.
-      const sessionStream = new MediaStream();
-      startPlay(playSettings, {
-        onError: (error) => {
-          dispatch({type:ErrorsActions.SET_ERROR_MESSAGE,message:error.message});
-          stopPlay(playSettings, peerConnectionRef.current, websocketRef.current, stopCallbacks);
-          dispatch({ type: PlaySettingsActions.SET_PLAY_FLAGS, playStart: false, playStarting: false, playStop: false, playStopping: false });
+      playSupervisor.start({
+        settings: playSettings,
+        ui: {
+          onReconnecting: (state) => {
+            dispatch({type:WebRTCPlayActions.SET_WEBRTC_PLAY_RECONNECTING, reconnecting:state});
+          },
+          // Between attempts nothing is playing, and the old handles must not be used.
+          onAttemptEnded: clearSession,
+          // The first attempt failing, or recovery giving up. Either way the session is over.
+          onFailed: (message) => {
+            dispatch({type:ErrorsActions.SET_ERROR_MESSAGE,message});
+            clearSession();
+            dispatch({ type: PlaySettingsActions.SET_PLAY_FLAGS, playStart: false, playStarting: false, playStop: false, playStopping: false });
+          },
         },
-        onConnectionStateChange: (result) => {
-          dispatch({type:WebRTCPlayActions.SET_WEBRTC_PLAY_CONNECTED,connected:result.connected});
+        // Fresh for every attempt: a replayed session gets its own stream, data channels and
+        // (through the stream changing) its own video element hooks.
+        makeCallbacks: () => {
+          // One stream per session, published to the store on its first track.
+          const sessionStream = new MediaStream();
+          return {
+            onConnectionStateChange: (result) => {
+              dispatch({type:WebRTCPlayActions.SET_WEBRTC_PLAY_CONNECTED,connected:result.connected});
+            },
+            onSetPeerConnection: (result) => {
+              dispatch({type:WebRTCPlayActions.SET_WEBRTC_PLAY_PEERCONNECTION,peerConnection:result.peerConnection});
+            },
+            onSetWebsocket: (result) => {
+              dispatch({type:WebRTCPlayActions.SET_WEBRTC_PLAY_WEBSOCKET,websocket:result.websocket});
+            },
+            onPeerConnectionOnTrack: (event) => {
+              console.log('ontrack:', event.track.kind, 'muted:', event.track.muted, 'readyState:', event.track.readyState);
+              const first = sessionStream.getTracks().length === 0;
+              sessionStream.addTrack(event.track);
+              // Published once. The element is attached when the stream identity changes, and
+              // reassigning on every track reloads the element after the Play click's gesture has
+              // expired, which leaves Safari with audio and no picture.
+              if (first) dispatch({type:WebRTCPlayActions.SET_WEBRTC_PLAY_STREAM,stream:sessionStream});
+            },
+            onSetDataChannel: (result) => {
+              // Only the chat channel is sent on from the UI; the captions handle is receive-only.
+              if (result.label === CHAT_CHANNEL_LABEL)
+                dispatch(DataChannelActions.setDataChannelHandle('play', result.dataChannel));
+            },
+            onDataChannelStateChange: (result) => {
+              // The panel tracks the chat channel's lifecycle; captions state isn't shown.
+              if (result.label === CHAT_CHANNEL_LABEL)
+                dispatch(DataChannelActions.setDataChannelState('play', result));
+            },
+            onDataChannelMessage: (result) => {
+              if (result.label === CAPTIONS_CHANNEL_LABEL)
+                dispatch(DataChannelActions.setCaption('play', result.data));
+              else
+                dispatch(DataChannelActions.addDataChannelMessage('play', describeReceivedMessage(result)));
+            },
+            onDataChannelError: (result) => {
+              dispatch({type:ErrorsActions.SET_ERROR_MESSAGE, message:'Data channel error: ' + result.message});
+            },
+            onDataChannelsUnavailable: () => {
+              // Playback is unaffected, so this only reports - no media state is touched.
+              dispatch({type:ErrorsActions.SET_ERROR_MESSAGE, message:DATA_CHANNELS_UNAVAILABLE_MESSAGE});
+            }
+          };
         },
-        onSetPeerConnection: stopCallbacks.onSetPeerConnection,
-        onSetWebsocket: stopCallbacks.onSetWebsocket,
-        onPeerConnectionOnTrack: (event) => {
-          console.log('ontrack:', event.track.kind, 'muted:', event.track.muted, 'readyState:', event.track.readyState);
-          const first = sessionStream.getTracks().length === 0;
-          sessionStream.addTrack(event.track);
-          // Published once. The element is attached when the stream identity changes, and
-          // reassigning on every track reloads the element after the Play click's gesture has
-          // expired, which leaves Safari with audio and no picture.
-          if (first) dispatch({type:WebRTCPlayActions.SET_WEBRTC_PLAY_STREAM,stream:sessionStream});
-        },
-        onSetDataChannel: (result) => {
-          // Only the chat channel is sent on from the UI; the captions handle is receive-only.
-          if (result.label === CHAT_CHANNEL_LABEL)
-            dispatch(DataChannelActions.setDataChannelHandle('play', result.dataChannel));
-        },
-        onDataChannelStateChange: (result) => {
-          // The panel tracks the chat channel's lifecycle; captions state isn't shown.
-          if (result.label === CHAT_CHANNEL_LABEL)
-            dispatch(DataChannelActions.setDataChannelState('play', result));
-        },
-        onDataChannelMessage: (result) => {
-          if (result.label === CAPTIONS_CHANNEL_LABEL)
-            dispatch(DataChannelActions.setCaption('play', result.data));
-          else
-            dispatch(DataChannelActions.addDataChannelMessage('play', describeReceivedMessage(result)));
-        },
-        onDataChannelError: (result) => {
-          dispatch({type:ErrorsActions.SET_ERROR_MESSAGE, message:'Data channel error: ' + result.message});
-        },
-        onDataChannelsUnavailable: () => {
-          // Playback is unaffected, so this only reports - no media state is touched.
-          dispatch({type:ErrorsActions.SET_ERROR_MESSAGE, message:DATA_CHANNELS_UNAVAILABLE_MESSAGE});
-        }
       });
+    }
+    else if (playSettings.playStart && playSupervisor.active)
+    {
+      // Already running (a second effect pass in StrictMode, or a click during a blip).
+      dispatch({type:PlaySettingsActions.SET_PLAY_FLAGS, playStart:false});
     }
     if (playSettings.playStarting && connected)
     {
       dispatch({type:PlaySettingsActions.SET_PLAY_FLAGS, playStarting:false});
     }
 
-    // A session that never reached "connected" still has to be stoppable - otherwise a start that
-    // stalls mid-negotiation leaves the page with no way out.
-    if (playSettings.playStop && !playSettings.playStopping && (connected || peerConnection))
+    // A session that never reached "connected", or one waiting to reconnect, still has to be
+    // stoppable, so this is gated on the supervisor rather than on connected.
+    if (playSettings.playStop && !playSettings.playStopping)
     {
-      dispatch({type:PlaySettingsActions.SET_PLAY_FLAGS, playStop:false, playStopping:true});
-      stopPlay(playSettings, peerConnection, websocket, stopCallbacks);
+      if (playSupervisor.active) {
+        dispatch({type:PlaySettingsActions.SET_PLAY_FLAGS, playStop:false, playStopping:true});
+        // Closes whatever attempt is current (the WHEP DELETE included) and cancels any wait.
+        playSupervisor.stop();
+        dispatch({type:WebRTCPlayActions.SET_WEBRTC_PLAY_RECONNECTING, reconnecting:null});
+        dispatch({type:PlaySettingsActions.SET_PLAY_FLAGS, playStarting:false});
+        clearSession();
+      } else {
+        dispatch({type:PlaySettingsActions.SET_PLAY_FLAGS, playStop:false});
+      }
     }
     if (playSettings.playStopping && !connected)
     {
@@ -114,7 +137,7 @@ const Player = () => {
     }
 
 
-  }, [dispatch,videoElement,playSettings,peerConnection,websocket,connected]);
+  }, [dispatch,videoElement,playSettings,connected]);
 
   // Dimensions come from loadedmetadata and loadeddata as well as resize, since resize alone
   // can arrive late for the first frame.
@@ -242,7 +265,7 @@ const Player = () => {
   <>
     {!flowing && (
       <div className="wz-video-placeholder wz-video-placeholder--over">
-        {connected ? 'Waiting for media' : 'Not playing'}
+        {reconnecting ? 'Reconnecting' : (connected ? 'Waiting for media' : 'Not playing')}
       </div>
     )}
     <video

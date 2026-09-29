@@ -8,7 +8,9 @@ const initialState = {
   // The received MediaStream. Held here rather than in the player so a player that mounts
   // mid-session (back to Play, or over to the combined page) shows the session in progress.
   stream: undefined,
-  connected: false
+  connected: false,
+  // { attempt, max, reason } while a lost session is being replaced (playSupervisor), else null.
+  reconnecting: null
 }
 
 const webrtcPlayReducer = (state = initialState, action) => {
@@ -25,6 +27,8 @@ const webrtcPlayReducer = (state = initialState, action) => {
       return { ...state, stream: action.stream };
     case WebRTCPlayActions.SET_WEBRTC_PLAY_CONNECTED:
       return { ...state, connected:action.connected };
+    case WebRTCPlayActions.SET_WEBRTC_PLAY_RECONNECTING:
+      return { ...state, reconnecting: action.reconnecting ?? null };
     default:
       return state
   }

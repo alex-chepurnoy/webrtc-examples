@@ -68,6 +68,9 @@ const PublishSettingsForm = ({ tab = 'connection' }) => {
   const dispatch = useDispatch();
   const publishSettings = useSelector((state) => state.publishSettings);
   const webrtcPublish = useSelector((state) => state.webrtcPublish);
+  // A session waiting to reconnect still owns these settings (the republish reuses them), so
+  // they stay locked, and Stop stays the action.
+  const sessionHeld = webrtcPublish.connected || webrtcPublish.reconnecting != null;
 
   // From the store, so a remount keeps the state. A missing track reads as off.
   const isCameraOn = typeof publishSettings.videoTrack?.kind === 'string' && publishSettings.videoEnabled;
@@ -365,7 +368,7 @@ const PublishSettingsForm = ({ tab = 'connection' }) => {
               value={publishSettings.signalingURL}
               suggestions={recentUrl.values}
               onForget={recentUrl.forget}
-              disabled={webrtcPublish.connected}
+              disabled={sessionHeld}
               aria-describedby={urlMismatched ? 'signalingURL-mismatch' : undefined}
               onChange={setSignalingURL}
               hint={urlMismatched ? (
@@ -385,7 +388,7 @@ const PublishSettingsForm = ({ tab = 'connection' }) => {
           offLabel="WSS"
           onLabel="WHIP"
           checked={publishSettings.useWhip}
-          disabled={webrtcPublish.connected}
+          disabled={sessionHeld}
           onChange={handleTransportChange}
         />
 
@@ -401,7 +404,7 @@ const PublishSettingsForm = ({ tab = 'connection' }) => {
                 name="publishAuthToken"
                 maxLength="1024"
                 value={publishSettings.authToken || ''}
-                disabled={webrtcPublish.connected || !publishSettings.useWhip}
+                disabled={sessionHeld || !publishSettings.useWhip}
                 aria-describedby="publishAuthToken-hint"
                 onChange={(e)=>dispatch({type:PublishSettingsActions.SET_PUBLISH_AUTH_TOKEN,authToken:e.target.value})}
               />
@@ -425,7 +428,7 @@ const PublishSettingsForm = ({ tab = 'connection' }) => {
               value={publishSettings.applicationName}
               suggestions={recentApplication.values}
               onForget={recentApplication.forget}
-              disabled={webrtcPublish.connected}
+              disabled={sessionHeld}
               onChange={(applicationName)=>dispatch({type:PublishSettingsActions.SET_PUBLISH_APPLICATION_NAME,applicationName})}
             />
           </div>
@@ -437,7 +440,7 @@ const PublishSettingsForm = ({ tab = 'connection' }) => {
               value={publishSettings.streamName}
               suggestions={recentStream.values}
               onForget={recentStream.forget}
-              disabled={webrtcPublish.connected}
+              disabled={sessionHeld}
               onChange={(streamName)=>dispatch({type:PublishSettingsActions.SET_PUBLISH_STREAM_NAME,streamName})}
             />
           </div>
@@ -451,7 +454,7 @@ const PublishSettingsForm = ({ tab = 'connection' }) => {
               label="Enable Chat"
               id="publishChatEnabled"
               checked={publishSettings.chatEnabled}
-              disabled={webrtcPublish.connected}
+              disabled={sessionHeld}
               onChange={(e)=>dispatch({type:PublishSettingsActions.SET_PUBLISH_CHAT_ENABLED,chatEnabled:e.target.checked})}
             />
           </div>
@@ -460,7 +463,7 @@ const PublishSettingsForm = ({ tab = 'connection' }) => {
               label="Enable Captions"
               id="publishCaptionsEnabled"
               checked={publishSettings.captionsEnabled}
-              disabled={webrtcPublish.connected}
+              disabled={sessionHeld}
               onChange={(e)=>dispatch({type:PublishSettingsActions.SET_PUBLISH_CAPTIONS_ENABLED,captionsEnabled:e.target.checked})}
             />
           </div>
@@ -520,7 +523,7 @@ const PublishSettingsForm = ({ tab = 'connection' }) => {
                 id="videoCodec"
                 name="videoCodec"
                 value={publishSettings.videoCodec}
-                disabled={webrtcPublish.connected}
+                disabled={sessionHeld}
                 onChange={(e) => dispatch({ type: PublishSettingsActions.SET_PUBLISH_VIDEO_CODEC, videoCodec: e.target.value })}
               >
                 {VIDEO_CODEC_OPTIONS.map((o) => (
@@ -695,7 +698,7 @@ const PublishSettingsForm = ({ tab = 'connection' }) => {
                     placeholder={STUN_SERVER_PLACEHOLDER}
                     maxLength="1024"
                     value={publishSettings.stunServerURL}
-                    disabled={webrtcPublish.connected}
+                    disabled={sessionHeld}
                     onChange={(e)=>dispatch({type:PublishSettingsActions.SET_PUBLISH_STUN_SERVER_URL,stunServerURL:e.target.value})}
                   />
                 </div>
@@ -712,7 +715,7 @@ const PublishSettingsForm = ({ tab = 'connection' }) => {
                     maxLength="1024"
                     placeholder={TURN_SERVER_PLACEHOLDER}
                     value={publishSettings.turnServerURL}
-                    disabled={webrtcPublish.connected}
+                    disabled={sessionHeld}
                     onChange={(e)=>dispatch({type:PublishSettingsActions.SET_PUBLISH_TURN_SERVER_URL,turnServerURL:e.target.value})}
                   />
                 </div>
@@ -728,7 +731,7 @@ const PublishSettingsForm = ({ tab = 'connection' }) => {
                     name="turnUsername"
                     maxLength="256"
                     value={publishSettings.turnUsername}
-                    disabled={webrtcPublish.connected}
+                    disabled={sessionHeld}
                     onChange={(e)=>dispatch({type:PublishSettingsActions.SET_PUBLISH_TURN_USERNAME,turnUsername:e.target.value})}
                   />
                 </div>
@@ -742,7 +745,7 @@ const PublishSettingsForm = ({ tab = 'connection' }) => {
                     name="turnPassword"
                     maxLength="256"
                     value={publishSettings.turnPassword}
-                    disabled={webrtcPublish.connected}
+                    disabled={sessionHeld}
                     onChange={(e)=>dispatch({type:PublishSettingsActions.SET_PUBLISH_TURN_PASSWORD,turnPassword:e.target.value})}
                   />
                 </div>
@@ -767,13 +770,13 @@ const PublishSettingsForm = ({ tab = 'connection' }) => {
         <div className="wz-actions-dock">
         <div className="row wz-inline-row">
           <div className="col-10">
-            { !webrtcPublish.connected &&
+            { !sessionHeld &&
               <button id="publish-toggle" type="button" className="btn"
                 disabled={publishSettings.publishStarting}
                 onClick={handlePublish}
               >Publish</button>
             }
-            { webrtcPublish.connected &&
+            { sessionHeld &&
               <button id="publish-toggle" type="button" className="btn"
                 onClick={(e)=>dispatch(PublishSettingsActions.stopPublish())}
               >Stop</button>

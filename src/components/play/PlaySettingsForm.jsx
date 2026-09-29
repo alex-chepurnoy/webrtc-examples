@@ -265,7 +265,10 @@ const PlaySettingsForm = ({ tab = 'connection' }) => {
 
   if (!initialized) return null;
 
-  const { connected } = webrtcPlay;
+  // A session waiting to reconnect still owns these settings (the replay reuses them), so they
+  // stay locked and Stop stays the action. Restart ICE needs a live connection, so it does not.
+  const { connected: iceUsable } = webrtcPlay;
+  const connected = iceUsable || webrtcPlay.reconnecting != null;
 
   // Only complain about something the user has actually typed, and has finished typing.
   const ipInvalid = ipChecked && playSettings.isIp && !!playSettings.ip && !isValidIpAddress(playSettings.ip);
@@ -553,7 +556,7 @@ const PlaySettingsForm = ({ tab = 'connection' }) => {
                 </div>
               </div>
             </div>
-        { connected &&
+        { iceUsable &&
           <div className="row mt-2">
             <div className="col-12">
               <button

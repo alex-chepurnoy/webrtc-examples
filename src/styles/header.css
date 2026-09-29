@@ -36,6 +36,13 @@
   color: var(--wz-success);
 }
 
+/* Amber: not live and not stopped, but on its way back. */
+.wz-status__badge--reconnecting {
+  background: color-mix(in srgb, var(--wz-warning) 18%, transparent);
+  border-color: var(--wz-warning);
+  color: var(--wz-warning);
+}
+
 .wz-status__dot {
   width: 7px;
   height: 7px;
