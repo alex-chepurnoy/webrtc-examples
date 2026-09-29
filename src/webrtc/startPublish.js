@@ -3,7 +3,7 @@
 import { addIceServers } from "../utils/IceServersUtils";
 import { applyVideoCodecPreference, isVideoCodecOfferable } from "../utils/CodecUtils";
 import { describeRejectedVideo, videoWasRejected } from "../utils/SdpAnswerUtils";
-import { describeSignalingError, instrumentPeerConnection, instrumentWebSocket, isWebSocketClosing, logEvent, loggedFetch, redactSecrets } from "../diagnostics/signalLog";
+import { describeSignalingError, instrumentPeerConnection, instrumentWebSocket, isWebSocketClosing, logEvent, loggedFetch, markWebSocketClosing, redactSecrets, sendSignal } from "../diagnostics/signalLog";
 import { validateParams } from "../utils/ValidationUtils";
 import { isNoVideoSelection } from "../utils/VideoTrackUtils";
 import { keepUntilStopped, releaseSessionHandles } from "./sessionHandles";
@@ -37,6 +37,17 @@ import {
   probeUnavailableReason,
   startSenderStamp
 } from "../diagnostics/latencyProbe";
+import {
+  ICE_RESTART_BUSY_STATUS,
+  ICE_RESTART_RETRY_MS,
+  armIceRestartTimeout,
+  clearIceRestartTimeout,
+  describeIceRestartStatus,
+  guardAttemptCallbacks,
+  logIceRestartUnanswered,
+  sessionLostFromClose,
+  withIceRestartTimeout
+} from "./sessionLoss";
 
 // Bring up the enabled publisher data channels: the full-duplex chat channel and/or the one-way
 // captions broadcast, each gated by its own setting. `onCaption` (if provided) mirrors each sent
@@ -189,23 +200,56 @@ const tearDownConnection = (peerConnection, websocket) => {
   }
 };
 
-// Single owner of "abandon this attempt and surface the failure". WS and
-// WHIP both route through here (and the WHIP-only DELETE lives alongside
-// the rest of the cleanup, not orphaned in the caller).
-const reportSimulcastRejection = ({
-  callbacks, peerConnection, websocket, whipSessionUrl
-}) => {
-  tearDownConnection(peerConnection, websocket);
-  if (whipSessionUrl) {
-    loggedFetch(whipSessionUrl, { method: "DELETE" }).catch(() => {});
+const getAuthHeaders = (authToken) =>
+  authToken ? { "Authorization": `Bearer ${authToken}` } : {};
+
+// Everything one attempt opened, closed in one place: the timers, the ICE restart recovery,
+// the session handles, the peer connection and the socket. Every exit comes here, a failure
+// through guardAttemptCallbacks and a deliberate close through the handle startPublish returns.
+//
+// sendClose asks the Engine to drop the session first, with CLOSE on a socket that is still
+// open. Best effort, so a republish does not find its own old session holding the stream name.
+// A WHIP resource is always DELETEd, as the Stop button always did.
+const tearDownAttempt = (session, publishSettings, { sendClose = false } = {}) => {
+  if (session.tornDown) return;
+  session.tornDown = true;
+
+  clearAnswerTimeout(session);
+  clearIceRestartTimeout(session);
+  clearTimeout(session.connectionTimeout);
+  if (session.recovery) session.recovery.dispose();
+
+  const { peerConnection, websocket } = session;
+  if (websocket) {
+    if (sendClose && websocket.readyState === WebSocket.OPEN && session.sessionId !== '[empty]') {
+      sendSignal(websocket, 'publish', {
+        messageType: "CLOSE",
+        action: "PUBLISH",
+        applicationName: publishSettings.applicationName,
+        streamName: publishSettings.streamName,
+        connectionId: session.sessionId,
+      });
+    }
+    // Before close(): a frame arriving while it closes raises an error that is not a failure.
+    markWebSocketClosing(websocket);
   }
+  tearDownConnection(peerConnection, websocket);
+
+  if (session.whipSessionUrl) {
+    const sessionUrl = session.whipSessionUrl;
+    session.whipSessionUrl = null;
+    loggedFetch(sessionUrl, { method: "DELETE", headers: getAuthHeaders(publishSettings.authToken) })
+      .catch(() => {});
+  }
+};
+
+// The guard around the callbacks has torn the attempt down (and DELETEd a WHIP resource)
+// before this reaches the page, so reporting it is all that is left to do.
+const reportSimulcastRejection = (callbacks) => {
   if (callbacks.onError) {
     callbacks.onError({ message: SIMULCAST_REJECTED_MESSAGE });
   }
 };
-
-const getAuthHeaders = (authToken) =>
-  authToken ? { "Authorization": `Bearer ${authToken}` } : {};
 
 const getStreamInfo = (publishSettings, session) => {
   return {
@@ -240,16 +284,39 @@ const peerConnectionCreateOfferSuccess = (description, publishSettings, websocke
         connectionId: streamInfo.sessionId,
       };
       console.log(`Sending ${payload.messageType}:`, JSON.stringify(redactSecrets(payload)));
-      websocket.send(JSON.stringify(payload));
+      const restart = payload.messageType === "ICE_RESTART";
+
+      // A frame given to a socket that is not open goes nowhere. A restart that cannot be sent
+      // means the signaling channel, and with it the session, is already gone.
+      if (!sendSignal(websocket, 'publish', payload)) {
+        if (restart) {
+          if (session.recovery) session.recovery.notifyRestartFailed();
+          callbacks.onSessionLost({ reason: 'ICE_RESTART not sent: the signaling socket is not open' });
+        } else if (callbacks.onError) {
+          callbacks.onError({ message: 'Websocket Error: the offer could not be sent, the socket is not open.' });
+        }
+        return;
+      }
+
+      if (restart) {
+        // An Engine that no longer holds the session can leave a restart unanswered. Without a
+        // limit the restart guard stays up and nothing ever tries again.
+        session.iceRestartPending = true;
+        armIceRestartTimeout(session, () => {
+          session.iceRestartPending = false;
+          logIceRestartUnanswered('publish');
+          if (session.recovery) session.recovery.notifyRestartFailed();
+          callbacks.onSessionLost({ reason: 'ICE restart unanswered after 8 s' });
+        });
+      }
 
       // An engine that doesn't understand the offer (see NegotiationFailureUtils) never replies, so
       // without this the page would sit in "starting" forever. Only the initial offer is guarded: an
-      // ICE restart has a session behind it and its own recovery.
+      // ICE restart has the timer above.
       if (payload.messageType === "OFFER") {
         armAnswerTimeout(session, () => {
           // Something else already ended this attempt (and reported it) if the socket is gone.
           if (websocket.readyState !== WebSocket.OPEN) return;
-          tearDownConnection(peerConnection, websocket);
           if (callbacks.onError)
             callbacks.onError({ message: getAnswerTimeoutMessage(publishSettings) });
         });
@@ -281,6 +348,7 @@ const websocketOnOpen = (publishSettings, websocket, callbacks, session) => {
     addIceServers(publishSettings, session);
     armEncodedStreams(session, publishSettings);
     peerConnection = new RTCPeerConnection(session.peerConnectionConfig);
+    session.peerConnection = peerConnection;
     instrumentPeerConnection(peerConnection, 'publish');
 
     peerConnection.onicecandidate = (event) => {
@@ -335,18 +403,12 @@ const websocketOnOpen = (publishSettings, websocket, callbacks, session) => {
     }
 
     peerConnection.onconnectionstatechange = (event) => {
-      if (event.currentTarget.connectionState === 'connected') {
-        if (callbacks.onConnectionStateChange)
-          callbacks.onConnectionStateChange({ connected: true });
-      } else {
-        if (callbacks.onConnectionStateChange)
-          callbacks.onConnectionStateChange({ connected: false });
-      }
+      reportConnectionState(event.currentTarget.connectionState, callbacks, session);
     }
 
     // ICE restart recovery: re-establishes the ICE connection in place when the network
     // path changes, without tearing down the publish session. See IceRestartUtils.
-    attachIceRestartRecovery(peerConnection);
+    session.recovery = attachIceRestartRecovery(peerConnection);
 
     // The data channels must be created before the first offer (we never renegotiate). The
     // publisher opens whichever of chat / captions are enabled up front.
@@ -383,6 +445,34 @@ const websocketOnOpen = (publishSettings, websocket, callbacks, session) => {
     callbacks.onSetPeerConnection({ peerConnection: peerConnection });
 }
 
+// connected tells the page it is live. failed after the Engine answered an ICE restart is the
+// restart not working: the path was repaired and there is still nothing at the other end.
+const reportConnectionState = (state, callbacks, session) => {
+  if (callbacks.onConnectionStateChange)
+    callbacks.onConnectionStateChange({ connected: state === 'connected', state });
+  if (state === 'failed' && session.recovery && session.recovery.hasRestartBeenAnswered())
+    callbacks.onSessionLost({ reason: 'connection failed after an ICE restart' });
+};
+
+// The status that answers an ICE restart. 425 is the Engine still busy with the last one and
+// is asked again; anything else means it no longer holds a session to restart.
+const handleIceRestartStatus = (status, description, callbacks, session) => {
+  clearIceRestartTimeout(session);
+  session.iceRestartPending = false;
+  if (status === ICE_RESTART_BUSY_STATUS) {
+    logEvent('warn', 'ws',
+      `publish status 425 to ICE_RESTART: the Engine is still restarting ICE, asking again in ${ICE_RESTART_RETRY_MS / 1000} s`,
+      description || null);
+    if (session.recovery) session.recovery.retryRestart(ICE_RESTART_RETRY_MS, 'retry after 425');
+    return;
+  }
+  logEvent('error', 'ws',
+    `publish status ${status} to ICE_RESTART: ${describeIceRestartStatus(status, description)}`,
+    description || null);
+  if (session.recovery) session.recovery.notifyRestartFailed();
+  callbacks.onSessionLost({ reason: `ICE_RESTART answered ${status}`, status });
+};
+
 const websocketOnMessage = (event, publishSettings, websocket, peerConnection, callbacks, session, pendingCandidates) => {
 
   let msgJSON = JSON.parse(event.data);
@@ -399,8 +489,10 @@ const websocketOnMessage = (event, publishSettings, websocket, peerConnection, c
 
   if (msgStatus === 504) {
     console.log("New stream connecting to Wowza Streaming Engine");
+  } else if (msgStatus !== 200 && session.iceRestartPending) {
+    handleIceRestartStatus(msgStatus, msgJSON['statusDescription'], callbacks, session);
   } else if (msgStatus !== 200) {
-    websocketOnError({ message: msgJSON['statusDescription'] }, callbacks);
+    websocketOnError({ message: msgJSON['statusDescription'], status: msgStatus }, callbacks);
   } else {
 
     if (msgJSON.message?.connectionId) {
@@ -409,9 +501,16 @@ const websocketOnMessage = (event, publishSettings, websocket, peerConnection, c
       for (const candidate of pendingCandidates) {
         candidate.connectionId = session.sessionId;
         console.log('Sending queued ICE candidate:', JSON.stringify(redactSecrets(candidate)));
-        websocket.send(JSON.stringify(candidate));
+        sendSignal(websocket, 'publish', candidate);
       }
       pendingCandidates.length = 0;
+    }
+
+    if (msgJSON.message?.sdp && session.iceRestartPending) {
+      // The Engine took the restart. If the connection fails even so, the session is gone.
+      clearIceRestartTimeout(session);
+      session.iceRestartPending = false;
+      if (session.recovery) session.recovery.notifyRestartAnswered();
     }
 
     if (msgJSON.message?.sdp) {
@@ -439,9 +538,7 @@ const websocketOnMessage = (event, publishSettings, websocket, peerConnection, c
           if (publishSettings.useSimulcast
               && !videoWasRejected(sdpData && sdpData.sdp)
               && !simulcastAcceptedInAnswer(sdpData.sdp)) {
-            reportSimulcastRejection({
-              callbacks, peerConnection, websocket
-            });
+            reportSimulcastRejection(callbacks);
             return;
           }
           session.dataChannels = handleRefusedDataChannels(sdpData.sdp, session.dataChannels, callbacks);
@@ -459,36 +556,69 @@ const websocketOnError = (error, callbacks) => {
   const message = describeSignalingError(error);
   logEvent('error', 'ws', 'publish signalling failed', message);
   if (callbacks.onError)
-    callbacks.onError({ message: 'Websocket Error: ' + message });
+    callbacks.onError({ message: 'Websocket Error: ' + message, status: error?.status });
 }
 
 // startPublish
 // callbacks:
-// - onError({message:''})
-// - onConnectionStateChange({connected:boolean})
+// - onError({message:'', status?}): the attempt failed and has already been torn down
+// - onSessionLost({reason, status?}): the Engine no longer holds the session (sessionLoss.js)
+// - onConnectionStateChange({connected:boolean, state:string})
 // - onSetPeerConnection({peerConnection:obj})
 // - onSetWebsocket({websocket:obj})
 // - onSetSenders({audioSender:obj,videoSender:obj})
 // - onWarning({message:string})
+//
+// Returns a handle on this one attempt, for the session supervisor:
+// - close({sendClose}): end it on purpose; nothing from it reaches the callbacks afterwards
+// - isIceRestartInProgress(): an ICE restart is out and not yet answered or given up on
 
 const startPublish = (publishSettings, websocket, callbacks) =>
 {
+  const session = {
+      sessionId: '[empty]',
+      // false until the initial offer/answer completes; afterwards every re-offer is an ICE restart.
+      negotiationEstablished: false,
+      // A rejected video m-line is reported once, not on every ICE-restart answer.
+      videoRejectionReported: false,
+      // The codec the offer was narrowed to, or null when the full list went out.
+      videoCodecApplied: null,
+      // handle to the enabled data channels, cleared once the server refuses them.
+      dataChannels: null,
+      // pending timer waiting for the answer to the initial offer, see NegotiationFailureUtils.
+      answerTimeout: null,
+      peerConnectionConfig: {iceServers: []},
+      // What this attempt opened, so that one teardown can close all of it.
+      peerConnection: null,
+      websocket: null,
+      socketOpened: false,
+      whipSessionUrl: null,
+      recovery: null,
+      connectionTimeout: null,
+      // An ICE restart is out and its answer timer is running (sessionLoss.js).
+      iceRestartPending: false,
+      iceRestartTimer: null,
+      // closed: ended on purpose. failed: ended by a failure that has been reported.
+      closed: false,
+      failed: false,
+      tornDown: false
+    };
+
+  const tearDown = (options) => tearDownAttempt(session, publishSettings, options);
+  // A failure tears down with CLOSE, so the Engine frees the stream name for the next attempt.
+  callbacks = guardAttemptCallbacks(session, callbacks, () => tearDown({ sendClose: true }));
+
+  const handle = {
+    close: ({ sendClose = false } = {}) => {
+      if (session.closed) return;
+      session.closed = true;
+      tearDown({ sendClose });
+    },
+    isIceRestartInProgress: () => Boolean(
+      session.iceRestartPending || (session.recovery && session.recovery.isRestartInProgress())),
+  };
+
   try {
-    
-    const session = {
-        sessionId: '[empty]',
-        // false until the initial offer/answer completes; afterwards every re-offer is an ICE restart.
-        negotiationEstablished: false,
-        // A rejected video m-line is reported once, not on every ICE-restart answer.
-        videoRejectionReported: false,
-        // The codec the offer was narrowed to, or null when the full list went out.
-        videoCodecApplied: null,
-        // handle to the enabled data channels, cleared once the server refuses them.
-        dataChannels: null,
-        // pending timer waiting for the answer to the initial offer, see NegotiationFailureUtils.
-        answerTimeout: null,
-        peerConnectionConfig: {iceServers: []}
-      };
 
     validateParams(publishSettings);
 
@@ -496,32 +626,49 @@ const startPublish = (publishSettings, websocket, callbacks) =>
       startPublishWhip(publishSettings, session, callbacks);
     }
     else {
-      
+
       if (websocket == null) {
         websocket = instrumentWebSocket(new WebSocket(publishSettings.signalingURL + "?webrtcImplementation=v2"), 'publish');
       }
 
       if (websocket != null) {
+        session.websocket = websocket;
         websocket.binaryType = 'arraybuffer';
 
-        
-        const connectionTimeout = setTimeout(() => {
+
+        session.connectionTimeout = setTimeout(() => {
           if (websocket.readyState !== WebSocket.OPEN) {
             websocket.close();
           }
         }, 10000);
 
         websocket.addEventListener("open", () => {
-          clearTimeout(connectionTimeout);
+          clearTimeout(session.connectionTimeout);
+          session.socketOpened = true;
           websocketOnOpen(publishSettings, websocket, callbacks, session);
         });
 
         websocket.addEventListener("error", (error) => {
-          clearTimeout(connectionTimeout);
+          clearTimeout(session.connectionTimeout);
           clearAnswerTimeout(session);
           // Errors that arrive because we are shutting down are not failures to report.
           if (isWebSocketClosing(websocket)) return;
+          // Once the socket was open, the close event that always follows an error says more
+          // (it has the code), so the loss is reported from there.
+          if (session.socketOpened) return;
           websocketOnError(error, callbacks);
+        });
+
+        // The Engine going away, or ending the session with its status on the close frame.
+        // There was no listener here at all, so a page stayed LIVE on a dead socket.
+        websocket.addEventListener("close", (event) => {
+          clearTimeout(session.connectionTimeout);
+          if (isWebSocketClosing(websocket)) return;
+          if (!session.socketOpened) {
+            websocketOnError(null, callbacks);
+            return;
+          }
+          callbacks.onSessionLost(sessionLostFromClose(event));
         });
 
         if (callbacks.onSetWebsocket)
@@ -533,7 +680,46 @@ const startPublish = (publishSettings, websocket, callbacks) =>
     if (callbacks.onError)
       callbacks.onError(e);
   }
+  return handle;
 }
+
+// A WHIP ICE restart is one PATCH. Refused with 425, the Engine is busy with a restart of its
+// own and is asked again; refused otherwise, failed on the network or unanswered in time, the
+// Engine no longer holds the session and no restart can bring it back.
+const restartIceOverWhip = (peerConnection, sessionUrl, publishSettings, session, callbacks) => {
+  session.iceRestartPending = true;
+  withIceRestartTimeout(sendWhipWhepIceRestart(peerConnection, sessionUrl, {
+    authHeaders: getAuthHeaders(publishSettings.authToken),
+    label: "WHIP",
+  }))
+    .then(() => {
+      session.iceRestartPending = false;
+      if (session.recovery) session.recovery.notifyRestartAnswered();
+    })
+    .catch((e) => {
+      session.iceRestartPending = false;
+      if (session.closed || session.failed) return;
+      if (e && e.status === ICE_RESTART_BUSY_STATUS) {
+        logEvent('warn', 'http',
+          `WHIP ICE restart answered 425: the Engine is still restarting ICE, asking again in ${ICE_RESTART_RETRY_MS / 1000} s`,
+          e.description || null);
+        if (session.recovery) session.recovery.retryRestart(ICE_RESTART_RETRY_MS, 'retry after 425');
+        return;
+      }
+      if (session.recovery) session.recovery.notifyRestartFailed();
+      if (e && e.timedOut) {
+        logIceRestartUnanswered('publish');
+        callbacks.onSessionLost({ reason: 'ICE restart unanswered after 8 s' });
+      } else if (e && e.status) {
+        // sendWhipWhepIceRestart has logged the status and the Engine's description.
+        callbacks.onSessionLost({ reason: `WHIP ICE restart rejected (${e.status})`, status: e.status });
+      } else {
+        const message = e?.message ?? String(e);
+        logEvent('error', 'http', `WHIP ICE restart failed: ${message}`, null);
+        callbacks.onSessionLost({ reason: `WHIP ICE restart failed: ${message}` });
+      }
+    });
+};
 
 const startPublishWhip = async (publishSettings, session, callbacks) => {
   let peerConnection;
@@ -546,18 +732,17 @@ const startPublishWhip = async (publishSettings, session, callbacks) => {
     addIceServers(publishSettings, session);
     armEncodedStreams(session, publishSettings);
     peerConnection = new RTCPeerConnection(session.peerConnectionConfig);
+    session.peerConnection = peerConnection;
     instrumentPeerConnection(peerConnection, 'publish');
 
     peerConnection.onconnectionstatechange = (event) => {
-      const connected = event.currentTarget.connectionState === "connected";
-      if (callbacks.onConnectionStateChange)
-        callbacks.onConnectionStateChange({ connected });
+      reportConnectionState(event.currentTarget.connectionState, callbacks, session);
     };
 
     // Auto-recovery: when ICE drops, restartIce() flags fresh credentials and fires
     // onnegotiationneeded (handled below). Reuses the same recovery state machine as the
     // WebSocket path so the heuristics stay in one place.
-    const iceRestartRecovery = attachIceRestartRecovery(peerConnection);
+    session.recovery = attachIceRestartRecovery(peerConnection);
 
     // ICE restart over WHIP (RFC 9725): on onnegotiationneeded we PATCH only the new credentials
     // to the resource URL as an application/trickle-ice-sdpfrag; the engine renegotiates ICE on
@@ -566,13 +751,7 @@ const startPublishWhip = async (publishSettings, session, callbacks) => {
     peerConnection.onnegotiationneeded = () => {
       // Initial WHIP offer is sent manually below; otherwise only for a restart we asked for.
       if (!negotiationEstablished || !sessionUrl || !consumeIceRestartOffer(peerConnection)) return;
-      sendWhipWhepIceRestart(peerConnection, sessionUrl, {
-        authHeaders: getAuthHeaders(publishSettings.authToken),
-        label: "WHIP",
-      }).catch((e) => {
-        iceRestartRecovery.notifyRestartFailed(); // a failed restart leaves ICE down; let a later transition retry
-        peerConnectionOnError(e, callbacks);
-      });
+      restartIceOverWhip(peerConnection, sessionUrl, publishSettings, session, callbacks);
     };
 
     peerConnection.onicecandidate = async (event) => {
@@ -582,12 +761,15 @@ const startPublishWhip = async (publishSettings, session, callbacks) => {
         pendingCandidates.push(candidate);
         return;
       }
+      if (session.closed || session.failed) return;
 
+      // A trickled candidate that does not arrive is not worth ending anything over: the Engine
+      // answers 204 even without a session, so this carries no signal about the session either.
       await loggedFetch(sessionUrl, {
         method: "PATCH",
         headers: { "Content-Type": "application/trickle-ice-sdpfrag", ...getAuthHeaders(publishSettings.authToken) },
         body: candidate
-      });
+      }).catch(() => {});
     };
 
     let audioSender;
@@ -613,10 +795,13 @@ const startPublishWhip = async (publishSettings, session, callbacks) => {
     // Same as the WebSocket path: create the channels before the offer so their m-lines are
     // negotiated up front (we never renegotiate). onnegotiationneeded is gated until
     // negotiationEstablished, so creating them here does not trigger a spurious WHIP re-offer.
-    const dataChannels = attachPublishDataChannels(peerConnection, callbacks, publishSettings);
+    const dataChannels = keepUntilStopped(
+      peerConnection, attachPublishDataChannels(peerConnection, callbacks, publishSettings));
 
     const offer = await peerConnection.createOffer();
     await peerConnection.setLocalDescription(offer);
+    // Closed while the offer was being made: the teardown has already run.
+    if (session.closed || session.failed) return;
 
     const offerSdp = publishSettings.useSimulcast
       ? ensureSimulcastSDP(peerConnection.localDescription.sdp, publishSettings.simulcastRenditions)
@@ -633,19 +818,35 @@ const startPublishWhip = async (publishSettings, session, callbacks) => {
       body: offerSdp
     });
 
-    if (!response.ok) {
-      throw new Error(getWhipWhepFailureMessage("WHIP", response.status, publishSettings));
+    const locationHeader = response.ok ? response.headers.get("Location") : null;
+    if (locationHeader)
+      sessionUrl = new URL(locationHeader, publishSettings.signalingURL).toString();
+
+    // Closed while the POST was out: the resource it made is nobody's now, so give it back.
+    if (session.closed || session.failed) {
+      if (sessionUrl)
+        loggedFetch(sessionUrl, { method: "DELETE", headers: getAuthHeaders(publishSettings.authToken) })
+          .catch(() => {});
+      return;
     }
 
-    const locationHeader = response.headers.get("Location");
-    sessionUrl = new URL(locationHeader, publishSettings.signalingURL).toString();
+    if (!response.ok) {
+      let description = '';
+      try { description = await response.text(); } catch { /* the status alone, then */ }
+      const error = new Error(getWhipWhepFailureMessage("WHIP", response.status, publishSettings, description));
+      error.status = response.status;
+      throw error;
+    }
+
+    // From here every exit gives the resource back, the teardown included.
+    session.whipSessionUrl = sessionUrl;
 
     for (const candidate of pendingCandidates) {
       await loggedFetch(sessionUrl, {
         method: "PATCH",
         headers: { "Content-Type": "application/trickle-ice-sdpfrag", ...getAuthHeaders(publishSettings.authToken) },
         body: candidate
-      });
+      }).catch(() => {});
     }
     pendingCandidates.length = 0;
 
@@ -657,6 +858,7 @@ const startPublishWhip = async (publishSettings, session, callbacks) => {
     console.log("Received WHIP Answer:");
     console.log(answerSDP);
 
+    if (session.closed || session.failed) return;
     await peerConnection.setRemoteDescription({
       type: "answer",
       sdp: answerSDP
@@ -670,9 +872,7 @@ const startPublishWhip = async (publishSettings, session, callbacks) => {
     if (publishSettings.useSimulcast
         && !videoWasRejected(answerSDP)
         && !simulcastAcceptedInAnswer(answerSDP)) {
-      reportSimulcastRejection({
-        callbacks, peerConnection, whipSessionUrl: sessionUrl
-      });
+      reportSimulcastRejection(callbacks);
       return;
     }
 
