@@ -541,3 +541,105 @@
 .wz-recent__row.is-active .wz-recent__forget { opacity: 1; }
 
 .wz-recent__forget:hover { color: var(--wz-text); background: var(--wz-hover); }
+
+/* ------------------------------------------------------------------ explainers */
+
+/*
+ * A field label with its info button. The row takes the label's bottom margin, so the field
+ * sits exactly where it did under a bare label.
+ */
+.wz-inspector .wz-label-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0 0 5px;
+  min-width: 0;
+}
+
+.wz-inspector .wz-label-row > label {
+  margin: 0;
+  min-width: 0;
+}
+
+/* Beside a switch the row is the left half of the line, not a line of its own. */
+.wz-inspector .wz-label-row--switch { margin: 0; }
+
+/* The dimmed-label rule above looks for a label directly in the field; this is the same rule
+   for one inside a label row, with or without a unit beside the control. */
+.wz-inspector .mb-3:has(> .form-control:disabled) > .wz-label-row > label,
+.wz-inspector .mb-3:has(> .form-select:disabled) > .wz-label-row > label,
+.wz-inspector .mb-3:has(> .input-group > .form-control:disabled) > .wz-label-row > label {
+  opacity: 0.6;
+}
+
+/*
+ * 16px drawn, 28px to hit: the ::after widens the target for a finger without making the
+ * glyph louder than the label it belongs to. Never dimmed, since it stays usable when the
+ * field beside it is locked.
+ */
+.wz-info-button {
+  position: relative;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--wz-border-strong);
+  border-radius: var(--wz-radius-pill);
+  background: transparent;
+  color: var(--wz-text-subtle);
+  font: italic 700 10px/1 Georgia, "Times New Roman", serif;
+  cursor: help;
+  transition: color var(--wz-transition), border-color var(--wz-transition);
+}
+
+.wz-info-button::after {
+  content: '';
+  position: absolute;
+  inset: -6px;
+}
+
+.wz-info-button:hover,
+.wz-info-button[aria-expanded='true'] {
+  border-color: var(--wz-accent);
+  color: var(--wz-accent-text);
+}
+
+.wz-info-button:focus { outline: none; }
+
+.wz-info-button:focus-visible {
+  outline: 2px solid var(--wz-accent);
+  outline-offset: 2px;
+}
+
+/*
+ * The pop-over. It lives in document.body, outside the inspector, so it is styled here without
+ * the .wz-inspector scope, and takes its colours from the same tokens: a raised surface with
+ * the text colour of that theme, never a fixed dark ground under a theme text colour.
+ */
+.wz-info-tip {
+  position: fixed;
+  z-index: 1080;
+  box-sizing: border-box;
+  width: max-content;
+  max-width: min(264px, calc(100vw - 16px));
+  padding: 8px 10px;
+  border: 1px solid var(--wz-border-strong);
+  border-radius: var(--wz-radius);
+  background: var(--wz-surface-raised);
+  color: var(--wz-text);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
+  font-family: var(--wz-font-sans);
+  font-size: 12px;
+  font-weight: 400;
+  font-style: normal;
+  line-height: 1.5;
+  letter-spacing: normal;
+  text-align: left;
+  white-space: normal;
+}
+
+.wz-info-tip[hidden] { display: none; }
