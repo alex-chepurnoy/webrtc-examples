@@ -1,4 +1,4 @@
-import { loggedFetch } from '../diagnostics/signalLog';
+import { logEvent, loggedFetch } from '../diagnostics/signalLog';
 
 // Helpers for WHIP/WHEP ICE restart over application/trickle-ice-sdpfrag (RFC 9725).
 //
@@ -65,7 +65,17 @@ export const sendWhipWhepIceRestart = async (peerConnection, sessionUrl, { authH
   });
 
   if (!restartResponse.ok) {
-    throw new Error(`${label} ICE restart failed: ${restartResponse.status}`);
+    // The body is the Engine's reason, and the only thing that tells "no such session" from a
+    // restart sent at the wrong moment, so it stays on the error and in the panel.
+    let description = '';
+    try { description = (await restartResponse.text()).trim().slice(0, 200); } catch { /* status alone, then */ }
+    const message = `${label} ICE restart rejected (${restartResponse.status})`
+      + (description ? `: ${description}` : '');
+    logEvent('error', 'http', message, null);
+    const error = new Error(message);
+    error.status = restartResponse.status;
+    error.description = description || null;
+    throw error;
   }
 
   const answerFragment = await restartResponse.text();

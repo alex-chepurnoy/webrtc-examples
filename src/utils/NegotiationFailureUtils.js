@@ -19,8 +19,12 @@ export const getAnswerTimeoutMessage = (settings) => {
   return dataChannelsRequested(settings) ? `${message} ${DATA_CHANNEL_VERSION_HINT}` : message;
 };
 
-export const getWhipWhepFailureMessage = (label, status, settings) => {
-  const message = `${label} request failed: ${status}.`;
+// The body, when the Engine sent one, says why (a stream name already in use, an unknown
+// application), so it goes into the message rather than the status alone.
+export const getWhipWhepFailureMessage = (label, status, settings, description) => {
+  // Capped, since a proxy in front of the Engine can answer with a whole HTML page.
+  const reason = typeof description === 'string' ? description.trim().slice(0, 200) : '';
+  const message = `${label} request failed: ${status}${reason ? ` (${reason})` : ''}.`;
   return status === 500 && dataChannelsRequested(settings) ? `${message} ${DATA_CHANNEL_VERSION_HINT}` : message;
 };
 
