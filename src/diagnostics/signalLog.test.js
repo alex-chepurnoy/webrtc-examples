@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   CLOSING_EXPLANATION, REDACTED, SIGNALING_ERROR_EXPLANATION, clearLog, describeSignalingError,
-  getEntries, instrumentPeerConnection, instrumentWebSocket, isWebSocketClosing, logEvent, logHttp,
-  markWebSocketClosing, redactSecrets, subscribe,
+  engineStatusFromCloseCode, getEntries, instrumentPeerConnection, instrumentWebSocket,
+  isWebSocketClosing, logEvent, logHttp, markWebSocketClosing, redactSecrets, sendSignal, subscribe,
 } from './signalLog';
 
 // A minimal EventTarget-based stand-in. Real WebSocket/RTCPeerConnection are not in jsdom.
@@ -179,6 +179,55 @@ describe('a socket closed on purpose', () => {
     expect(entry.direction).toBe('info');
     expect(entry.label).toBe('publish socket error while closing');
     expect(entry.detail).toBe(CLOSING_EXPLANATION);
+  });
+});
+
+// A close nobody asked for is what the reconnect logic acts on, so it must stand out.
+describe('a socket that closes', () => {
+  const closeEvent = (code, reason = '') => Object.assign(new Event('close'), { code, reason });
+
+  it('reads as routine when the page closed it', () => {
+    const socket = instrumentWebSocket(new FakeSocket(), 'publish');
+    markWebSocketClosing(socket);
+    socket.dispatchEvent(closeEvent(1000));
+    expect(getEntries().at(-1)).toMatchObject({ direction: 'info', label: 'publish socket closed' });
+  });
+
+  it('reads as an error when the other end closed it', () => {
+    const socket = instrumentWebSocket(new FakeSocket(), 'play');
+    socket.dispatchEvent(closeEvent(1006));
+    expect(getEntries().at(-1)).toMatchObject({
+      direction: 'error', label: 'play socket closed unexpectedly (code 1006)',
+    });
+  });
+
+  it('names the Engine status a 4xxx close code carries', () => {
+    const socket = instrumentWebSocket(new FakeSocket(), 'publish');
+    socket.dispatchEvent(closeEvent(4410, 'application shut down'));
+    const entry = getEntries().at(-1);
+    expect(entry.label).toBe('publish socket closed unexpectedly (code 4410, Engine status 410)');
+    expect(entry.detail).toEqual({ code: 4410, reason: 'application shut down', engineStatus: 410 });
+    expect(engineStatusFromCloseCode(1006)).toBeNull();
+    expect(engineStatusFromCloseCode(4503)).toBe(503);
+  });
+});
+
+describe('sendSignal', () => {
+  it('sends on an open socket', () => {
+    const socket = new FakeSocket();
+    socket.readyState = WebSocket.OPEN;
+    expect(sendSignal(socket, 'publish', { messageType: 'OFFER' })).toBe(true);
+    expect(socket.sent).toEqual([JSON.stringify({ messageType: 'OFFER' })]);
+  });
+
+  it('logs a frame it could not send instead of passing it to a closed socket', () => {
+    const socket = new FakeSocket();
+    socket.readyState = WebSocket.CLOSED;
+    expect(sendSignal(socket, 'publish', { messageType: 'ICE_RESTART', secureToken: 'abc' })).toBe(false);
+    expect(socket.sent).toEqual([]);
+    const entry = getEntries().at(-1);
+    expect(entry).toMatchObject({ direction: 'error', label: 'publish ICE_RESTART not sent: socket is closed' });
+    expect(entry.detail.secureToken).toBe(REDACTED);
   });
 });
 

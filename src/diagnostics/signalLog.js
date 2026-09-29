@@ -99,8 +99,20 @@ export const instrumentWebSocket = (websocket, role) => {
     logEvent('in', 'ws', `${role} \u2190 ${label}`, detail);
   });
   websocket.addEventListener('open', () => logEvent('info', 'ws', `${role} socket open`, websocket.url));
-  websocket.addEventListener('close', (e) =>
-    logEvent('info', 'ws', `${role} socket closed`, { code: e.code, reason: e.reason || null }));
+  // A close nobody asked for is the Engine going away or ending the session, which is what the
+  // reconnect logic acts on, so it reads as an error rather than as routine lifecycle.
+  websocket.addEventListener('close', (e) => {
+    const detail = { code: e.code, reason: e.reason || null };
+    if (isWebSocketClosing(websocket)) {
+      logEvent('info', 'ws', `${role} socket closed`, detail);
+      return;
+    }
+    const status = engineStatusFromCloseCode(e.code);
+    if (status != null) detail.engineStatus = status;
+    logEvent('error', 'ws',
+      `${role} socket closed unexpectedly (code ${e.code}${status != null ? `, Engine status ${status}` : ''})`,
+      detail);
+  });
   websocket.addEventListener('error', () => (isWebSocketClosing(websocket)
     ? logEvent('info', 'ws', `${role} socket error while closing`, CLOSING_EXPLANATION)
     : logEvent('error', 'ws', `${role} socket error`, SIGNALING_ERROR_EXPLANATION)));
@@ -128,6 +140,33 @@ export const markWebSocketClosing = (websocket) => {
 };
 
 export const isWebSocketClosing = (websocket) => Boolean(websocket && websocket[CLOSING]);
+
+/*
+ * The Engine carries its own status on a close frame by adding 4000 (a terminated session with
+ * 410 closes with 4410), because codes under 1000 are not valid close codes. Returns that status,
+ * or null for an ordinary close code.
+ */
+export const engineStatusFromCloseCode = (code) =>
+  (Number.isInteger(code) && code >= 4000 && code <= 4999 ? code - 4000 : null);
+
+const SOCKET_STATE_NAMES = ['connecting', 'open', 'closing', 'closed'];
+
+/**
+ * Sends one signaling frame, or logs why it could not go. A frame handed to a socket that is
+ * not open is dropped by the browser without a word, and the panel used to show it as sent.
+ * Returns whether it was sent.
+ */
+export const sendSignal = (websocket, role, payload) => {
+  const open = typeof WebSocket === 'undefined' ? 1 : WebSocket.OPEN;
+  if (!websocket || websocket.readyState !== open) {
+    const state = websocket ? (SOCKET_STATE_NAMES[websocket.readyState] || 'unusable') : 'missing';
+    logEvent('error', 'ws', `${role} ${payload?.messageType || 'frame'} not sent: socket is ${state}`,
+      redactSecrets(payload));
+    return false;
+  }
+  websocket.send(JSON.stringify(payload));
+  return true;
+};
 
 /**
  * User-facing text for a signaling failure. Accepts a socket Event (no detail), an Error, or
