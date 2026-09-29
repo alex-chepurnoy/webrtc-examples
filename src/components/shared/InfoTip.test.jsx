@@ -9,6 +9,17 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+// Focus opens a tip only when it came from the keyboard, so tests say which it was.
+const keyboardFocus = (element) => {
+  fireEvent.keyDown(document, { key: 'Tab' });
+  act(() => element.focus());
+};
+
+const pointerFocus = (element) => {
+  fireEvent.pointerDown(element, { pointerType: 'mouse' });
+  act(() => element.focus());
+};
+
 const renderTip = () => {
   render(<InfoTip topic="Scale down">Divides the width and the height.</InfoTip>);
   const button = screen.getByRole('button', { name: 'About Scale down' });
@@ -61,7 +72,7 @@ describe('InfoTip', () => {
 
   it('opens on keyboard focus and closes on blur', () => {
     const { button, tip } = renderTip();
-    act(() => button.focus());
+    keyboardFocus(button);
     expect(tip).toBeVisible();
     act(() => button.blur());
     expect(tip).not.toBeVisible();
@@ -69,11 +80,54 @@ describe('InfoTip', () => {
 
   it('closes on Escape and keeps focus on the button', () => {
     const { button, tip } = renderTip();
-    act(() => button.focus());
+    keyboardFocus(button);
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(tip).not.toBeVisible();
     expect(button).toHaveAttribute('aria-expanded', 'false');
     expect(document.activeElement).toBe(button);
+  });
+
+  it('does not open from the focus a mouse click gives', () => {
+    const { button, tip } = renderTip();
+    pointerFocus(button);
+    expect(tip).not.toBeVisible();
+  });
+
+  // The review case: pin, close, then hover and leave. The button still has focus from the
+  // clicks, and that focus must not hold the tip open.
+  it('closes after a pin, a closing click and a hover out, although the button keeps focus', () => {
+    vi.useFakeTimers();
+    const { button, tip } = renderTip();
+    fireEvent.pointerOver(button, { pointerType: 'mouse' });
+    pointerFocus(button);
+    fireEvent.click(button);
+    expect(tip).toBeVisible();
+    fireEvent.pointerDown(button, { pointerType: 'mouse' });
+    fireEvent.click(button);
+    expect(tip).not.toBeVisible();
+
+    fireEvent.pointerOut(button, { pointerType: 'mouse' });
+    act(() => { vi.advanceTimersByTime(200); });
+    fireEvent.pointerOver(button, { pointerType: 'mouse' });
+    expect(tip).toBeVisible();
+    fireEvent.pointerOut(button, { pointerType: 'mouse' });
+    act(() => { vi.advanceTimersByTime(200); });
+    expect(document.activeElement).toBe(button);
+    expect(tip).not.toBeVisible();
+  });
+
+  it('closes a pinned tip when its button is hidden with its tab', () => {
+    const Tab = ({ hidden }) => (
+      <div hidden={hidden}><InfoTip topic="x">text</InfoTip></div>
+    );
+    const { rerender } = render(<Tab hidden={false} />);
+    const button = screen.getByRole('button', { name: 'About x' });
+    fireEvent.click(button);
+    expect(screen.getByRole('tooltip')).toBeVisible();
+    rerender(<Tab hidden />);
+    // What a ResizeObserver or a scroll reports when the button collapses.
+    act(() => { window.dispatchEvent(new Event('resize')); });
+    expect(screen.getByRole('tooltip', { hidden: true })).not.toBeVisible();
   });
 
   it('opens on a tap, which has no hover, and closes on a second tap', () => {

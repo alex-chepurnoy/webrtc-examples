@@ -4,8 +4,8 @@ import { createPortal } from 'react-dom';
 /*
  * A small "i" button beside a field label that explains the setting in a pop-over.
  *
- * It opens on mouse over, on keyboard focus and on a tap, because hover alone reaches
- * neither a keyboard nor a touch screen. It is not a title attribute for the same reason, and
+ * It opens on mouse over, on keyboard focus (not the focus a click gives) and on a tap,
+ * because hover alone reaches neither a keyboard nor a touch screen. It is not a title attribute for the same reason, and
  * because a title cannot hold a paragraph. A click or tap pins it open; a second one, a tap
  * elsewhere or Escape closes it.
  *
@@ -23,6 +23,25 @@ const CLOSE_DELAY_MS = 120;
 const GAP = 6;
 const EDGE = 8;
 
+/*
+ * Whether the last thing the person did was a key press rather than a pointer. Focus opens a
+ * tip only when it came from the keyboard: a mouse click or a tap also focuses the button,
+ * and a tip opened by that focus would stay open after a closing click, for as long as the
+ * button kept focus. :focus-visible is not used for this: whether a focus matches it varies
+ * between browsers and test environments, so the page keeps its own record. A screen reader
+ * that moves focus without a key press still gets the text, through aria-describedby.
+ */
+let keyboardModality = false;
+let modalityWatched = false;
+const watchModality = () => {
+  if (modalityWatched || typeof document === 'undefined') return;
+  modalityWatched = true;
+  document.addEventListener('keydown', () => { keyboardModality = true; }, true);
+  document.addEventListener('pointerdown', () => { keyboardModality = false; }, true);
+};
+
+const focusIsFromKeyboard = () => keyboardModality;
+
 const InfoTip = ({ topic, children, className = '' }) => {
   const id = useId();
   const tipId = `info-tip-${id.replace(/:/g, '')}`;
@@ -37,6 +56,8 @@ const InfoTip = ({ topic, children, className = '' }) => {
   // back, so a dismissed tip does not reopen underneath a pointer that never moved.
   const [dismissed, setDismissed] = useState(false);
   const [position, setPosition] = useState(null);
+
+  useEffect(watchModality, []);
 
   const open = !dismissed && (hovered || focused || pinned);
 
@@ -94,6 +115,22 @@ const InfoTip = ({ topic, children, className = '' }) => {
     const tip = tipRef.current;
     if (!button || !tip) return;
     const anchor = button.getBoundingClientRect();
+
+    /*
+     * A button that is no longer on screen takes its tip with it. Its tab was hidden (the tab
+     * groups use the hidden attribute), or the panel scrolled it out of view: a pinned tip
+     * left behind would float over the tab strip, attached to nothing.
+     */
+    const panel = button.closest('.wz-inspector__body');
+    const bounds = panel ? panel.getBoundingClientRect() : null;
+    const gone = !button.isConnected || button.closest('[hidden]') != null
+      || (bounds && bounds.height > 0 && (anchor.bottom <= bounds.top || anchor.top >= bounds.bottom));
+    if (gone) {
+      setPinned(false);
+      setHovered(false);
+      setFocused(false);
+      return;
+    }
     const width = tip.offsetWidth;
     const height = tip.offsetHeight;
     const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
@@ -121,9 +158,13 @@ const InfoTip = ({ topic, children, className = '' }) => {
     // The panel scrolls and resizes under an open tip; follow the button rather than float.
     window.addEventListener('scroll', place, true);
     window.addEventListener('resize', place);
+    // Hiding the tab collapses the button without a scroll or resize event; this sees that.
+    const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(place) : null;
+    if (observer && buttonRef.current) observer.observe(buttonRef.current);
     return () => {
       window.removeEventListener('scroll', place, true);
       window.removeEventListener('resize', place);
+      if (observer) observer.disconnect();
     };
   }, [open, place]);
 
@@ -165,7 +206,7 @@ const InfoTip = ({ topic, children, className = '' }) => {
         aria-describedby={tipId}
         onPointerEnter={(e) => { if (e.pointerType === 'mouse') hoverOn(); }}
         onPointerLeave={(e) => { if (e.pointerType === 'mouse') hoverOff(); }}
-        onFocus={() => setFocused(true)}
+        onFocus={() => setFocused(focusIsFromKeyboard())}
         onBlur={() => { setFocused(false); setDismissed(false); }}
         onClick={onClick}
       >
