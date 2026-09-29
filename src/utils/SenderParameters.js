@@ -123,8 +123,9 @@ const usable = (sender) => sender != null && typeof sender.getParameters === 'fu
  *
  * With simulcast, each negotiated encoding takes its rendition's scale down and max bitrate,
  * matched by rid; renditions that were not negotiated are ignored. The single max bitrate
- * does not apply then, since each rendition has its own. A sender added by addTrack has no
- * rids, so it is treated as a single stream whatever the simulcast setting says.
+ * never applies with simulcast on, not even to a sender that has no rids (one added by
+ * replaceVideoTrack): its field is disabled then, so whatever it holds is stale, and a
+ * limit nobody can see or edit must not reach the wire.
  *
  * The a=rid max-br in the offer is written once, from the renditions at publish time, and
  * only informs the Engine: setLocalDescription has already run when ensureSimulcastSDP edits
@@ -152,7 +153,7 @@ export const applyVideoSenderParameters = (sender, settings = {}) => {
         const bps = Number(rendition.maxBitrate);
         if (bps > 0) encoding.maxBitrate = Math.round(bps);
       });
-    } else {
+    } else if (!simulcast) {
       setMaxBitrate(parameters.encodings[0], maxBitrateKbps);
     }
 
@@ -174,4 +175,40 @@ export const applyAudioSenderParameters = (sender, settings = {}) => {
 
     return sender.setParameters(parameters).then(() => true);
   });
+};
+
+/*
+ * The settings each sender takes, from the publish settings in the store. Shared by the two
+ * callers, startPublish and the Publisher's effects, so both always send the same thing.
+ * Under simulcast the single cap's field is disabled and may hold a stale value, so it is
+ * left out entirely.
+ */
+export const videoSenderSettings = (publishSettings) => ({
+  simulcast: Boolean(publishSettings.useSimulcast),
+  renditions: publishSettings.simulcastRenditions,
+  maxBitrateKbps: publishSettings.useSimulcast
+    ? undefined
+    : maxBitrateKbpsToApply(publishSettings.videoMaxBitrateKbps, VIDEO_MAX_BITRATE_KBPS),
+  degradationPreference: publishSettings.degradationPreference,
+});
+
+export const audioSenderSettings = (publishSettings) => ({
+  maxBitrateKbps: maxBitrateKbpsToApply(publishSettings.audioMaxBitrateKbps, AUDIO_MAX_BITRATE_KBPS),
+});
+
+/*
+ * The first apply, as soon as startPublish has made the senders, so a single stream never
+ * starts uncapped while ICE and the answer are on their way. It goes through the same
+ * per-sender queue as every later change, so it cannot race the apply that follows on
+ * connect. Before negotiation a sender may have no encodings yet, or refuse the write; both
+ * are only logged, because the apply on connect runs again and reports a real failure.
+ */
+export const applyInitialSenderParameters = ({ videoSender, audioSender }, publishSettings) => {
+  const logFailure = (kind) => (error) => logEvent('warn', 'pc',
+    `publish ${kind} limits not applied before negotiation; they are applied again on connect`,
+    error?.message ?? String(error));
+  return Promise.all([
+    applyVideoSenderParameters(videoSender, videoSenderSettings(publishSettings)).catch(logFailure('video')),
+    applyAudioSenderParameters(audioSender, audioSenderSettings(publishSettings)).catch(logFailure('audio')),
+  ]);
 };

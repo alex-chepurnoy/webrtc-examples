@@ -115,7 +115,10 @@ const PublishSimulcastSettings = () => {
 
   const renditions = publishSettings.simulcastRenditions;
   const simulcastDisabled = !publishSettings.useSimulcast;
-  const setupLocked = simulcastDisabled || webrtcPublish.connected;
+  // Locked from the moment Publish is pressed, not only once connected: the offer is built
+  // from these while the session is starting, and a change then would not match it.
+  const publishing = webrtcPublish.connected || publishSettings.publishStarting;
+  const setupLocked = simulcastDisabled || publishing;
   const atLimit = renditions.length >= MAX_SIMULCAST_RENDITIONS;
 
   // Said where the table is, not only when Publish is pressed; a live bitrate edit has no
@@ -182,7 +185,7 @@ const PublishSimulcastSettings = () => {
           id="publishUseSimulcast"
           name="publishUseSimulcast"
           checked={publishSettings.useSimulcast || false}
-          disabled={webrtcPublish.connected}
+          disabled={publishing}
           onChange={(e) => dispatch({
             type: PublishSettingsActions.SET_PUBLISH_USE_SIMULCAST,
             useSimulcast: e.target.checked

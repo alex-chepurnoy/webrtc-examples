@@ -4,7 +4,9 @@ import {
   AUDIO_MAX_BITRATE_KBPS,
   VIDEO_MAX_BITRATE_KBPS,
   applyAudioSenderParameters,
+  applyInitialSenderParameters,
   applyVideoSenderParameters,
+  videoSenderSettings,
   bpsToKbps,
   getMaxBitrateKbpsError,
   kbpsToBps,
@@ -135,15 +137,19 @@ describe('applyVideoSenderParameters, single stream', () => {
     expect(sender.written.at(-1)).not.toHaveProperty('degradationPreference');
   });
 
-  it('treats a sender with no rids as one stream even when simulcast is on', async () => {
-    // replaceVideoTrack adds a plain addTrack sender when there was none.
-    const sender = fakeSender([{}]);
+  it('never applies the single cap with simulcast on, even to a sender with no rids', async () => {
+    // replaceVideoTrack adds a plain addTrack sender when there was none. The single cap's
+    // field is disabled under simulcast, so its value may be stale and must not be sent.
+    const sender = fakeSender([{ maxBitrate: 1000000 }]);
     await applyVideoSenderParameters(sender, {
       simulcast: true,
       renditions: [{ rid: 'h', scaleResolutionDownBy: 1, maxBitrate: 2500000 }],
-      maxBitrateKbps: '800',
+      maxBitrateKbps: '100',
+      degradationPreference: 'balanced',
     });
-    expect(sender.written.at(-1).encodings[0].maxBitrate).toBe(800000);
+    const written = sender.written.at(-1);
+    expect(written.encodings[0].maxBitrate).toBe(1000000);
+    expect(written.degradationPreference).toBe('balanced');
   });
 
   it('resolves false and logs, without writing, when there are no encodings', async () => {
@@ -257,5 +263,45 @@ describe('applyAudioSenderParameters', () => {
     const sender = fakeSender([]);
     await expect(applyAudioSenderParameters(sender, { maxBitrateKbps: '16' })).resolves.toBe(false);
     expect(getEntries().at(-1).label).toMatch(/audio limits not applied/);
+  });
+});
+
+describe('applyInitialSenderParameters', () => {
+  const settings = {
+    useSimulcast: false,
+    simulcastRenditions: [],
+    videoMaxBitrateKbps: '300',
+    audioMaxBitrateKbps: '16',
+    degradationPreference: 'maintain-framerate',
+  };
+
+  it('caps both senders as soon as they exist', async () => {
+    const video = fakeSender();
+    const audio = fakeSender();
+    await applyInitialSenderParameters({ videoSender: video, audioSender: audio }, settings);
+    expect(video.written.at(-1).encodings[0].maxBitrate).toBe(300000);
+    expect(video.written.at(-1).degradationPreference).toBe('maintain-framerate');
+    expect(audio.written.at(-1).encodings[0].maxBitrate).toBe(16000);
+  });
+
+  it('shares the queue with the apply on connect, so the two never overlap', async () => {
+    const video = fakeSender([{}], { delay: 5 });
+    const initial = applyInitialSenderParameters({ videoSender: video }, settings);
+    const onConnect = applyVideoSenderParameters(video, videoSenderSettings({ ...settings, videoMaxBitrateKbps: '250' }));
+    await Promise.all([initial, onConnect]);
+    expect(video.overlaps).toBe(0);
+    expect(video.written.at(-1).encodings[0].maxBitrate).toBe(250000);
+  });
+
+  it('is harmless before negotiation: no encodings, a refused write, or no sender at all', async () => {
+    const empty = fakeSender([]);
+    const refusing = fakeSender([{}], { failWith: Object.assign(new Error('not yet'), { name: 'InvalidStateError' }) });
+    await expect(applyInitialSenderParameters({ videoSender: empty, audioSender: refusing }, settings)).resolves.toBeDefined();
+    await expect(applyInitialSenderParameters({}, settings)).resolves.toBeDefined();
+    expect(getEntries().at(-1).label).toMatch(/audio limits not applied before negotiation/);
+  });
+
+  it('leaves the single cap out under simulcast', () => {
+    expect(videoSenderSettings({ ...settings, useSimulcast: true }).maxBitrateKbps).toBeUndefined();
   });
 });

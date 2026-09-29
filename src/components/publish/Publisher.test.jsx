@@ -126,6 +126,21 @@ describe('Publisher sender limits', () => {
     expect(video.overlaps).toBe(0);
   });
 
+  it('never sends a stale single cap under simulcast, even to a sender with no rids', async () => {
+    const store = makeStore();
+    act(() => {
+      store.dispatch({ type: PublishSettingsActions.SET_PUBLISH_VIDEO_MAX_BITRATE, videoMaxBitrateKbps: '100' });
+      store.dispatch({ type: PublishSettingsActions.SET_PUBLISH_USE_SIMULCAST, useSimulcast: true });
+    });
+    render(<Provider store={store}><Publisher /></Provider>);
+    // What replaceVideoTrack adds when there was no sender: addTrack, so no rids.
+    const video = fakeSender([{}]);
+    connect(store, { video, audio: null });
+    await flush();
+    expect(video.setParameters).toHaveBeenCalled();
+    expect(video.last().encodings[0].maxBitrate).toBeUndefined();
+  });
+
   it('reports a failed apply through the error banner', async () => {
     const store = makeStore();
     render(<Provider store={store}><Publisher /></Provider>);

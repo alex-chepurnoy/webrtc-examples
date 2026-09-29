@@ -85,6 +85,17 @@ describe('the simulcast table', () => {
     expect(screen.getByRole('button', { name: 'About Max (kbps)' })).toBeEnabled();
   });
 
+  it('locks the simulcast switch and the ladder shape as soon as Publish is pressed', () => {
+    const store = renderTable();
+    act(() => {
+      store.dispatch({ type: PublishSettingsActions.SET_PUBLISH_FLAGS, publishStarting: true });
+    });
+    expect(document.getElementById('publishUseSimulcast')).toBeDisabled();
+    expect(screen.getByRole('textbox', { name: 'Rendition ID, row 1' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Remove rendition h' })).toBeDisabled();
+    expect(screen.getByRole('spinbutton', { name: 'Max kbps, rendition h' })).toBeEnabled();
+  });
+
   it('names each remove button for its rendition', () => {
     const store = renderTable();
     for (const rid of ['h', 'm', 'l']) {

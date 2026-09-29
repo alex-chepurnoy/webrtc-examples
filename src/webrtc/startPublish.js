@@ -16,6 +16,7 @@ import {
   simulcastAcceptedInAnswer
 } from "../utils/SimulcastUtils";
 import { attachIceRestartRecovery, consumeIceRestartOffer } from "../utils/IceRestartUtils";
+import { applyInitialSenderParameters } from "../utils/SenderParameters";
 import { sendWhipWhepIceRestart } from "../utils/SdpFragUtils";
 import attachDataChannel, {
   CHAT_CHANNEL_LABEL,
@@ -369,6 +370,9 @@ const websocketOnOpen = (publishSettings, websocket, callbacks, session) => {
     if (callbacks.onSetSenders)
       callbacks.onSetSenders({ audioSender: audioSender, videoSender: videoSender });
 
+    // The caps from the start, not only from connect; see applyInitialSenderParameters.
+    applyInitialSenderParameters({ audioSender, videoSender }, publishSettings);
+
     websocket.addEventListener("message", (event) => { websocketOnMessage(event, publishSettings, websocket, peerConnection, callbacks, session, pendingCandidates); });
 
   }
@@ -602,6 +606,9 @@ const startPublishWhip = async (publishSettings, session, callbacks) => {
 
     if (callbacks.onSetSenders)
       callbacks.onSetSenders({ audioSender, videoSender });
+
+    // As on the WebSocket path: capped from the start. Not awaited, so the offer is not held up.
+    applyInitialSenderParameters({ audioSender, videoSender }, publishSettings);
 
     // Same as the WebSocket path: create the channels before the offer so their m-lines are
     // negotiated up front (we never renegotiate). onnegotiationneeded is gated until

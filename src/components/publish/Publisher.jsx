@@ -13,11 +13,10 @@ import stopPublish from '../../webrtc/stopPublish';
 import replaceAudioTrack from '../../webrtc/replaceAudioTrack';
 import replaceVideoTrack from '../../webrtc/replaceVideoTrack';
 import {
-  AUDIO_MAX_BITRATE_KBPS,
-  VIDEO_MAX_BITRATE_KBPS,
   applyAudioSenderParameters,
   applyVideoSenderParameters,
-  maxBitrateKbpsToApply,
+  audioSenderSettings,
+  videoSenderSettings,
 } from '../../utils/SenderParameters';
 
 const Publisher = () => {
@@ -144,8 +143,9 @@ const Publisher = () => {
   // The sender limits: bitrate caps, simulcast scale down and bitrate per rendition, and
   // what to give up when bandwidth is short. All of them can change mid-stream.
   //
-  // One effect per sender and nothing else writes their parameters, so two setParameters
-  // never overlap on one sender (SenderParameters.js queues them as well). They depend on
+  // startPublish applies them once as soon as the senders exist, so a stream starts capped;
+  // these effects cover every change after that. Both go through the per-sender queue in
+  // SenderParameters.js, so two setParameters never overlap on one sender. They depend on
   // the sender objects themselves: replaceVideoTrack and replaceAudioTrack add a new sender
   // when there was none, and that one needs the limits too. Re-runs on connect, so values
   // edited while connecting are picked up. An invalid cap is passed as undefined, which
@@ -162,12 +162,9 @@ const Publisher = () => {
   useEffect(() => {
     if (!connected || videoSender == null) return;
 
-    applyVideoSenderParameters(videoSender, {
-      simulcast: useSimulcast,
-      renditions: simulcastRenditions,
-      maxBitrateKbps: maxBitrateKbpsToApply(videoMaxBitrateKbps, VIDEO_MAX_BITRATE_KBPS),
-      degradationPreference,
-    }).catch((error) => {
+    applyVideoSenderParameters(videoSender, videoSenderSettings({
+      useSimulcast, simulcastRenditions, videoMaxBitrateKbps, degradationPreference,
+    })).catch((error) => {
       dispatch({type:ErrorsActions.SET_ERROR_MESSAGE, message:'Could not apply the video limits: ' + error.message});
     });
   },[dispatch,connected,videoSender,useSimulcast,simulcastRenditions,videoMaxBitrateKbps,degradationPreference]);
@@ -175,9 +172,7 @@ const Publisher = () => {
   useEffect(() => {
     if (!connected || audioSender == null) return;
 
-    applyAudioSenderParameters(audioSender, {
-      maxBitrateKbps: maxBitrateKbpsToApply(audioMaxBitrateKbps, AUDIO_MAX_BITRATE_KBPS),
-    }).catch((error) => {
+    applyAudioSenderParameters(audioSender, audioSenderSettings({ audioMaxBitrateKbps })).catch((error) => {
       dispatch({type:ErrorsActions.SET_ERROR_MESSAGE, message:'Could not apply the audio limit: ' + error.message});
     });
   },[dispatch,connected,audioSender,audioMaxBitrateKbps]);
