@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { STALL_MS, STALL_POLL_MS, inboundBytes, startStallWatch } from './stallWatch';
+import { STALL_MS, STALL_NO_AUDIO_MS, STALL_POLL_MS, STREAM_LISTED, inboundBytes, startStallWatch } from './stallWatch';
 import { clearLog, getEntries } from '../diagnostics/signalLog';
 
 /*
@@ -74,12 +74,39 @@ describe('startStallWatch', () => {
     stop();
   });
 
-  it('judges a stream with no audio on video alone', async () => {
+  it('judges a stream with no audio on video alone, over the longer window', async () => {
     const pc = fakePeerConnection();
     pc.kinds.delete('audio');
     const onStall = vi.fn();
     startStallWatch({ peerConnection: pc, onStall });
     pc.bytes.video = 100;
+    await tick(STALL_POLL_MS + STALL_MS + STALL_POLL_MS);
+    expect(onStall).not.toHaveBeenCalled();
+    await tick(STALL_NO_AUDIO_MS - STALL_MS);
+    expect(onStall).toHaveBeenCalledWith({ reason: 'no media received for 20 s' });
+  });
+
+  it('gives a stream the Engine still lists one more window before calling it stalled', async () => {
+    const pc = fakePeerConnection();
+    const onStall = vi.fn();
+    const checkStream = vi.fn(async () => STREAM_LISTED);
+    startStallWatch({ peerConnection: pc, onStall, checkStream, streamName: 'cam' });
+    pc.bytes.video = 100; pc.bytes.audio = 50;
+    await tick(STALL_POLL_MS + STALL_MS + STALL_POLL_MS);
+    expect(checkStream).toHaveBeenCalledTimes(1);
+    expect(onStall).not.toHaveBeenCalled();
+    expect(getEntries().map((e) => e.label))
+      .toContain('play media stalled but the stream "cam" is still on the Engine; waiting');
+    await tick(STALL_MS + STALL_POLL_MS);
+    expect(checkStream).toHaveBeenCalledTimes(1);
+    expect(onStall).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports the stall at once when the stream is gone or the Engine will not say', async () => {
+    const pc = fakePeerConnection();
+    const onStall = vi.fn();
+    startStallWatch({ peerConnection: pc, onStall, checkStream: async () => null });
+    pc.bytes.video = 100; pc.bytes.audio = 50;
     await tick(STALL_POLL_MS + STALL_MS + STALL_POLL_MS);
     expect(onStall).toHaveBeenCalledTimes(1);
   });
@@ -91,6 +118,7 @@ describe('startStallWatch', () => {
     await tick(STALL_MS * 3);
     expect(onStall).not.toHaveBeenCalled();
     pc.bytes.video = 10;
+    pc.bytes.audio = 10;
     await tick(STALL_POLL_MS + STALL_MS + STALL_POLL_MS);
     expect(onStall).toHaveBeenCalledTimes(1);
     stop();
@@ -118,5 +146,17 @@ describe('startStallWatch', () => {
     const calls = pc.getStats.mock.calls.length;
     await tick(STALL_MS * 3);
     expect(pc.getStats.mock.calls.length).toBe(calls);
+  });
+});
+
+describe('streamListedCheck', () => {
+  it('says listed only for a list with the stream in it', async () => {
+    const { streamListedCheck } = await import('./playSupervisor');
+    const settings = { signalingURL: 'wss://engine.example/webrtc-session.json', applicationName: 'live', streamName: 'cam' };
+    const answer = (result) => streamListedCheck(settings, async () => result)();
+    expect(await answer({ status: 'ok', streams: ['cam'] })).toBe(STREAM_LISTED);
+    expect(await answer({ status: 'ok', streams: ['other'] })).toBeNull();
+    expect(await answer({ status: 'error', code: 400 })).toBeNull();
+    expect(await answer({ status: 'unreachable' })).toBeNull();
   });
 });

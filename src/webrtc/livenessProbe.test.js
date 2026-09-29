@@ -55,6 +55,9 @@ describe('livenessProbe', () => {
     // A WHIP origin in the field still gives the signaling endpoint.
     expect(livenessProbeUrl('https://engine.example'))
       .toBe('wss://engine.example/webrtc-session.json?webrtcImplementation=v2&wzProbe=liveness');
+    // A field that already asks for v2 does not get the parameter twice.
+    expect(livenessProbeUrl('wss://engine.example/webrtc-session.json?webrtcImplementation=v2'))
+      .toBe('wss://engine.example/webrtc-session.json?webrtcImplementation=v2&wzProbe=liveness');
   });
 
   it('waits out the grace period, then checks on the interval', async () => {

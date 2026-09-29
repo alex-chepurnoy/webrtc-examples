@@ -35,7 +35,9 @@ export const LIVENESS_PROBE_QUERY = 'webrtcImplementation=v2&wzProbe=liveness';
 export const livenessProbeUrl = (signalingURL) => {
   const base = signalingLookupUrl(signalingURL);
   if (!base) return null;
-  return `${base}${base.includes('?') ? '&' : '?'}${LIVENESS_PROBE_QUERY}`;
+  // A signaling URL that already asks for v2 keeps its own parameter rather than a second one.
+  const query = /[?&]webrtcImplementation=/.test(base) ? 'wzProbe=liveness' : LIVENESS_PROBE_QUERY;
+  return `${base}${base.includes('?') ? '&' : '?'}${query}`;
 };
 
 /**
