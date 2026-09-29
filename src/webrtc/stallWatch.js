@@ -11,7 +11,10 @@
  * which is what "neither has grown" comes to when audio never reports.
  *
  * Not checked while an ICE restart is out: media is expected to stop while the path is
- * repaired, and the restart has its own limit.
+ * repaired, and the restart has its own limit. And not before any media has arrived at all:
+ * a stream the Engine lists but whose publisher has sent nothing yet is waiting, not lost,
+ * and replaying it would only find the same silence. What an application restart leaves is
+ * media that was flowing and stopped.
  */
 
 import { logEvent } from '../diagnostics/signalLog';
@@ -55,6 +58,7 @@ export const startStallWatch = ({
   let timer = null;
   let last = { video: null, audio: null };
   let lastGrowth = now();
+  let seenMedia = false;
 
   const schedule = () => {
     if (!stopped) timer = setTimeout(check, pollMs);
@@ -84,6 +88,8 @@ export const startStallWatch = ({
     const bytes = inboundBytes(report);
     if (grew(last.video, bytes.video) || grew(last.audio, bytes.audio)) lastGrowth = now();
     last = bytes;
+    if ((bytes.video || 0) > 0 || (bytes.audio || 0) > 0) seenMedia = true;
+    if (!seenMedia) lastGrowth = now();
 
     if (now() - lastGrowth >= stallMs) {
       stopped = true;

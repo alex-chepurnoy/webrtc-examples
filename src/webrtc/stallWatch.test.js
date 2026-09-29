@@ -84,6 +84,18 @@ describe('startStallWatch', () => {
     expect(onStall).toHaveBeenCalledTimes(1);
   });
 
+  it('waits for media to have flowed once before it calls anything a stall', async () => {
+    const pc = fakePeerConnection();
+    const onStall = vi.fn();
+    const stop = startStallWatch({ peerConnection: pc, onStall });
+    await tick(STALL_MS * 3);
+    expect(onStall).not.toHaveBeenCalled();
+    pc.bytes.video = 10;
+    await tick(STALL_POLL_MS + STALL_MS + STALL_POLL_MS);
+    expect(onStall).toHaveBeenCalledTimes(1);
+    stop();
+  });
+
   it('only counts while connected and while no ICE restart is out', async () => {
     const pc = fakePeerConnection();
     let restarting = false;
