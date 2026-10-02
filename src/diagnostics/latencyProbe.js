@@ -51,6 +51,15 @@ import {
   estimateClock,
 } from './clockSync';
 import {
+  CLOCK_TEST_HOOK,
+  clockNow,
+  exposeForTests,
+  sendAfter,
+  testForwardDelayMs,
+  testReverseDelayMs,
+  testSkewMs,
+} from './clockTestHook';
+import {
   createFrameStamper,
   nextSequenceFor,
   readFrame,
@@ -547,6 +556,10 @@ export const subscribe = (fn) => {
 /** The full state, never null, for a caller that wants the status and reason behind no figure. */
 export const getSample = () => sample;
 
+// Test builds only: the clock descriptor for the end-to-end tests, and the marker that says the
+// hook is in this build. A no-op in production.
+exposeForTests(() => sample.clock);
+
 /*
  * Clears what was measured, and nothing else. Called when a receiver starts, so figures from a
  * previous session never leak into a new one. Sender state is left alone: on the split view the
@@ -619,6 +632,27 @@ const startWorker = () => {
 };
 
 /*
+ * Test builds only: keeps the worker's clock skew equal to the page's, which a test may change
+ * at any moment. Checked on a short timer rather than hooked, so the test just assigns
+ * window.__wzClockTest.skewMs. Stops when the worker does.
+ */
+const followTestSkew = (worker) => {
+  let posted = null;
+  const sync = () => {
+    const skewMs = testSkewMs();
+    if (skewMs === posted) return;
+    posted = skewMs;
+    worker.postMessage({ op: 'clock-test', skewMs });
+  };
+  sync();
+  const timer = window.setInterval(sync, 100);
+  worker.addEventListener('error', () => window.clearInterval(timer));
+  worker.addEventListener('message', ({ data }) => {
+    if (data?.op === 'ended') window.clearInterval(timer);
+  });
+};
+
+/*
  * Pipes the encoded stream through the transform, or reports why it could not. It runs inside
  * the publish and play paths and createEncodedStreams throws if already called or if the
  * connection lacks encodedInsertableStreams, so nothing may escape: a diagnostic must not break
@@ -688,6 +722,7 @@ const pipeEncodedStream = (endpoint, { label, mainThread, worker: route = null, 
       settled = true;
       window.clearTimeout(timer);
       handle.post = (message) => worker.postMessage(message);
+      if (CLOCK_TEST_HOOK) followTestSkew(worker);
       return;
     }
     if (data.op === 'ended') {
@@ -775,7 +810,7 @@ export const startSenderStamp = (videoSender, { videoCodec } = {}) => {
       + 'it knows, so frames go out unstamped', layout);
   };
 
-  const stamper = createFrameStamper({ onRefused });
+  const stamper = createFrameStamper({ onRefused, now: clockNow });
   const attached = pipeEncodedStream(videoSender, {
     label: 'sender',
     mainThread: () => new TransformStream({
@@ -945,7 +980,7 @@ export const startReceiverProbe = (videoReceiver) => {
     mainThread: () => new TransformStream({
       transform(frame, controller) {
         try {
-          if (!stopped) recordReadFrame(readFrame(frame));
+          if (!stopped) recordReadFrame(readFrame(frame, clockNow));
         } catch (error) {
           reportTransformFailure('receiver', error, failure);
         }
@@ -1047,7 +1082,7 @@ const openClockChannel = (peerConnection, create, onMessage) => {
       {
         onDataChannelMessage: ({ label, data }) => {
           if (label !== CLOCK_CHANNEL_LABEL) return;
-          onMessage(data, Date.now());
+          onMessage(data, clockNow());
         },
       },
       { label: CLOCK_CHANNEL_LABEL, create },
@@ -1073,7 +1108,10 @@ export const attachClockResponder = (peerConnection) => {
     // A reply on this channel is our own echo coming back on a page running both arms.
     if (!ping || ping.kind !== 'ping') return;
     try {
-      channel.send(buildClockReply({ ping, t1: arrivedAt, t2: Date.now() }));
+      const reply = buildClockReply({ ping, t1: arrivedAt, t2: clockNow() });
+      const failed = (error) =>
+        logEvent('error', 'pc', 'latency probe clock reply failed', error?.message ?? String(error));
+      sendAfter(() => channel.send(reply), testReverseDelayMs(), failed);
     } catch (error) {
       logEvent('error', 'pc', 'latency probe clock reply failed', error?.message ?? String(error));
     }
@@ -1128,8 +1166,10 @@ export const attachClockInitiator = (peerConnection) => {
     // A closing or closed channel never answers; stop the timer chain even if nobody calls close().
     if (channel.readyState === 'closing' || channel.readyState === 'closed') return;
     try {
-      const t0 = Date.now();
-      channel.send(buildClockPing({ sequence, t0, id }));
+      const t0 = clockNow();
+      const ping = buildClockPing({ sequence, t0, id });
+      // Held back after t0 in a test build, so it is forward path delay; immediate otherwise.
+      sendAfter(() => channel.send(ping), testForwardDelayMs());
       pending.set(sequence, t0);
       sequence += 1;
       // Unanswered pings must not accumulate; the window is all the history that matters.
