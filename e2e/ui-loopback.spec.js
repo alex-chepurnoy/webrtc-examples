@@ -63,6 +63,24 @@ test.describe('combined page settings', () => {
     await expect(page.locator('#playStreamName')).toHaveValue('copyMe');
   });
 
+  // The Engine keeps the WHIP and WHEP tokens as separate settings, so one must never fill the other.
+  test('the WHIP auth token is not copied into the WHEP auth token', async ({ page }) => {
+    await page.goto('/#/loopback');
+    await page.locator('#publishUseWhip').check();
+    await page.fill('#publishAuthToken', 'whip-only-token');
+    await page.fill('#streamName', 'noTokenCopy');
+
+    await page.getByRole('button', { name: 'Player', exact: true }).click();
+    await page.locator('#playUseWhep').check();
+    await page.fill('#playAuthToken', 'whep-own-token');
+    await page.locator('#copy-from-publisher').click();
+
+    await expect(page.locator('#playStreamName')).toHaveValue('noTokenCopy');
+    await expect(page.locator('#playAuthToken')).toHaveValue('whep-own-token');
+    await expect(page.locator('#playAuthToken')).not.toHaveValue('whip-only-token');
+    await expect(page.locator('#copy-from-publisher + small')).not.toContainText(/token/i);
+  });
+
   test('WHIP on the publisher becomes WHEP on the player', async ({ page }) => {
     await page.goto('/#/loopback');
     await page.locator('#publishUseWhip').check();

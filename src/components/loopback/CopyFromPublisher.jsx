@@ -5,13 +5,14 @@ import * as PlaySettingsActions from '../../actions/playSettingsActions';
 
 /*
  * Fills the player's connection settings from the publisher's. STUN and TURN are not copied:
- * the two sides can legitimately need different ICE paths.
+ * the two sides can legitimately need different ICE paths. Nor is the auth token: the Engine
+ * keeps the WHIP and WHEP tokens as separate settings, so a publish token copied across would
+ * fill the player with a value the Engine rejects.
  */
 const FIELDS = [
   ['signalingURL', PlaySettingsActions.SET_PLAY_SIGNALING_URL, 'signalingURL'],
   ['applicationName', PlaySettingsActions.SET_PLAY_APPLICATION_NAME, 'applicationName'],
   ['streamName', PlaySettingsActions.SET_PLAY_STREAM_NAME, 'streamName'],
-  ['authToken', PlaySettingsActions.SET_PLAY_AUTH_TOKEN, 'authToken'],
 ];
 
 const CopyFromPublisher = () => {
@@ -64,7 +65,7 @@ const CopyFromPublisher = () => {
         {copied ? 'Copied from publisher' : 'Copy settings from publisher'}
       </button>
       <small className="form-text text-muted">
-        Takes the URL, application, stream, token, transport and data channels from the
+        Takes the URL, application, stream, transport and data channels from the
         publisher. ICE servers are left alone, because the two sides can need different ones.
       </small>
     </div>
