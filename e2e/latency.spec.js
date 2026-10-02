@@ -497,8 +497,11 @@ test.describe('the frame stamp survives the Engine', () => {
       await viewer.waitForTimeout(10_000);
 
       const stats = await inboundVideoStats(viewer);
-      const publisherData = await readInstrument(publisher);
+      // The player first: the publisher is still stamping, so a snapshot of it taken before the
+      // player's can miss a frame the player has already read, and that frame would then look
+      // like a stamp the publisher never wrote.
       const playerData = await readInstrument(viewer);
+      const publisherData = await readInstrument(publisher);
       const sent = summarize('wss -> wss, publisher', publisherData);
       const read = summarize('wss -> wss, player', playerData);
       console.log(`inbound stats: ${JSON.stringify(stats)}`);
@@ -530,8 +533,11 @@ test.describe('the frame stamp survives the Engine', () => {
       await viewer.waitForTimeout(10_000);
 
       const stats = await inboundVideoStats(viewer);
-      const publisherData = await readInstrument(publisher);
+      // The player first: the publisher is still stamping, so a snapshot of it taken before the
+      // player's can miss a frame the player has already read, and that frame would then look
+      // like a stamp the publisher never wrote.
       const playerData = await readInstrument(viewer);
+      const publisherData = await readInstrument(publisher);
       summarize('wss -> WHEP, publisher', publisherData);
       const read = summarize('wss -> WHEP, player', playerData);
       console.log(`inbound stats: ${JSON.stringify(stats)}`);
