@@ -120,7 +120,7 @@ describe('LatencyGroup', () => {
     expect(rowValue('Total')).toBe('0 to 370 ms');
     expect(rowValue('Clock')).toBe('± 250 ms');
     expect(screen.getByText('bound, assuming stable clocks')).toBeTruthy();
-    expect(screen.getByText(/Wide because the path between the two ends is long/)).toBeTruthy();
+    expect(screen.getByText(/Wide because the path between the two ends is long or uneven/)).toBeTruthy();
     expect(screen.queryByText(/too uncertain/)).toBeNull();
   });
 

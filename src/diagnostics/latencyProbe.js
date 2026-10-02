@@ -152,6 +152,14 @@ export const median = (values) => {
  * `monoNow` is performance.now(), for the age of the newest sample; without it the age is
  * unknown and the bound is not widened for silence.
  */
+/*
+ * The half-width of a steady 2 ms round trip is 2 ms plus the drift allowance for the sample's
+ * age and duration (2.25 ms at an age of one second). Without this the allowance alone would
+ * move a 2 ms path from exact to a range. It covers a newest sample up to a couple of seconds
+ * old at the 1 s ping cadence; a 3 ms round trip (2.5 ms plus drift) stays a range.
+ */
+const SAME_CLOCK_DRIFT_ALLOWANCE_MS = 0.5;
+
 export const describeClock = (samples, { sameContext = false, monoNow = null } = {}) => {
   const estimate = estimateClock(samples, { monoNow });
 
@@ -201,7 +209,7 @@ export const describeClock = (samples, { sameContext = false, monoNow = null } =
    * it needs a round trip of about 2 ms, so in practice a local Engine.
    */
   const sameClock = Math.abs(estimate.offsetMs) <= CLOCK_GRANULARITY_MS
-    && estimate.uncertaintyMs <= CLOCK_GRANULARITY_MS;
+    && estimate.uncertaintyMs <= CLOCK_GRANULARITY_MS + SAME_CLOCK_DRIFT_ALLOWANCE_MS;
   const bound = estimate.uncertaintyMs + TIMER_RESOLUTION_MS;
 
   return {

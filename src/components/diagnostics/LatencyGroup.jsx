@@ -170,7 +170,7 @@ const describeClock = (clock) => {
     ];
     if (clock.wide === true) {
       parts.push(
-        'Wide because the path between the two ends is long; the true value lies anywhere in '
+        'Wide because the path between the two ends is long or uneven; the true value lies anywhere in '
         + 'the range. For an exact figure test on one machine.',
       );
     }

@@ -238,7 +238,8 @@ page that publishes one stream and plays another is not in this row.
 
 Two browsers on one machine share a clock, but the probe has no way to prove that. It
 bounds the offset the same way as for two machines, and it can only call the result exact
-when the estimate is within 2 ms of zero with a bound of 2 ms or less, which needs a round
+when the estimate is within 2 ms of zero with a bound of about 2 ms (2.5 ms allowed for the
+drift on a sample a second or two old), which needs a round
 trip of about 2 ms. Against a remote Engine the same setup reads as a range, which is
 honest: the probe cannot tell it from two machines.
 

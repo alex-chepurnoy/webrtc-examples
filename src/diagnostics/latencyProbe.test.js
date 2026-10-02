@@ -272,6 +272,25 @@ describe('describeClock', () => {
     expect(clock.uncertaintyMs).toBeGreaterThan(WIDE_RANGE_MS);
   });
 
+  // A steady round trip of a couple of milliseconds with offset zero is one clock, at any age
+  // the 1 s ping cadence produces; three milliseconds is already a range.
+  it('keeps exact for round trips of 0 to 2 ms up to a second old, and not for 3 ms', () => {
+    const at = (rttMs, ageMs) => describeClock(
+      repeat(10, () => ({ ...roundTrip({ rttMs, offsetMs: 0 }), m3: 5_000 })),
+      { monoNow: 5_000 + ageMs },
+    );
+    for (const rttMs of [0, 1, 2]) {
+      for (const ageMs of [0, 500, 1_000]) {
+        expect(at(rttMs, ageMs).exact, `rtt ${rttMs} age ${ageMs}`).toBe(true);
+      }
+    }
+    for (const ageMs of [0, 1_000]) {
+      const clock = at(3, ageMs);
+      expect(clock.exact, `rtt 3 age ${ageMs}`).toBe(false);
+      expect(clock.mode).toBe('cross-machine');
+    }
+  });
+
   it('does not call a tight range wide', () => {
     const clock = describeClock(repeat(10, () => roundTrip({ rttMs: 20, offsetMs: 500 })));
     expect(clock.wide).toBe(false);

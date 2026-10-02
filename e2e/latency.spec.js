@@ -1516,8 +1516,8 @@ test.describe('how these numbers are measured', () => {
   });
 });
 
-// Both ends share one Date.now, so the offset is exact even though the clock samples' round
-// trip to the Engine exceeds the trusted bound.
+// Both ends share one Date.now, so the offset is exact (no bound on the figures) even though
+// the clock samples' round trip to the Engine makes the clock exchange itself a wide range.
 test.describe('the combined page clock', () => {
 
   test('measures a latency rather than refusing over the sample round trip', async ({ page }) => {
