@@ -107,6 +107,13 @@ describe('reading the lookup reply', () => {
       .toEqual({ status: LOOKUP_ERROR, code: 404, message: 'Application not found' });
   });
 
+  // What the Engine sends for an application whose WebRTC EnableQuery setting is off.
+  it('keeps the Engine’s reason when stream query is not enabled', () => {
+    const description = 'Application live does not have WebRTC stream query enabled.';
+    expect(readAvailableStreamsReply({ statusCode: 400, statusDescription: description }))
+      .toEqual({ status: LOOKUP_ERROR, code: 400, message: description });
+  });
+
   it('reads anything else as an error, not as nothing live', () => {
     expect(readAvailableStreamsReply({ something: 'else' }).status).toBe(LOOKUP_ERROR);
     expect(readAvailableStreamsReply(null).status).toBe(LOOKUP_ERROR);
