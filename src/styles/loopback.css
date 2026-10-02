@@ -74,6 +74,70 @@
   .wz-loopback__video { container-type: size; }
 }
 
+/*
+ * Chat: one disclosure bar under the panes, and the two panels side by side when it is open.
+ * The panels wrap onto separate rows when the stage is too narrow for two, which is also the
+ * stacked small-screen layout.
+ */
+.wz-chat {
+  flex-shrink: 0;
+  margin: 0 18px 14px;
+  background: var(--wz-surface);
+  border: 1px solid var(--wz-border);
+  border-radius: var(--wz-radius-lg);
+}
+
+.wz-chat__toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 38px;
+  padding: 0 14px;
+  background: transparent;
+  border: 0;
+  border-radius: var(--wz-radius-lg);
+  color: var(--wz-text);
+  font-weight: 600;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.wz-chat__toggle:hover { background: var(--wz-hover); }
+.wz-chat__toggle:focus-visible { outline: 2px solid var(--wz-focus-ring); outline-offset: -2px; }
+
+.wz-chat__count {
+  margin-left: auto;
+  font-family: var(--wz-font-mono);
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--wz-text-subtle);
+}
+
+.wz-chat__panels {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  gap: 14px;
+  padding: 12px 14px 14px;
+  border-top: 1px solid var(--wz-border);
+}
+
+/* display above would otherwise beat the hidden attribute. */
+.wz-chat__panels[hidden] { display: none; }
+
+.wz-chat__side { min-width: 0; }
+
+.wz-chat__label {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--wz-text);
+}
+
+/* The panel carries a top margin for its place on the single pages. */
+.wz-chat__side > .data-channel-panel { margin-top: 0 !important; }
+
 /* On a phone the two panes stack, each picture at the full width. The shell's own
    small-screen layout, and the reason for the explicit ratio, is in shell.css. */
 @media (max-width: 767.98px) {
@@ -84,4 +148,6 @@
     width: 100%;
     aspect-ratio: 16 / 9;
   }
+
+  .wz-chat { margin: 0 12px 12px; }
 }
