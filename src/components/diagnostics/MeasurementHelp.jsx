@@ -102,7 +102,7 @@ const MeasurementHelp = ({
               </tr>
               <tr>
                 <th scope="row">Clock</th>
-                <td>Proven, or estimated</td>
+                <td>Proven, or bounded</td>
                 <td>
                   How the publisher&apos;s clock relates to this one. See below.
                 </td>
@@ -158,11 +158,15 @@ const MeasurementHelp = ({
           <p>
             The two legs are timed on two clocks. When every frame measured is one this page
             stamped itself, as on Publish + Play playing its own stream, there is one clock and
-            the figures are exact. Otherwise the offset between the two clocks is estimated over
-            a data channel and every figure that depends on it carries a plus or minus bound.
-            Two tabs on one machine share a clock but cannot prove it, so they read exact only
-            when the round trip to the server is a couple of milliseconds, as with a server on
-            the same machine. The player row needs no clock and is shown in every case.
+            the figures are exact. Otherwise the offset between the two clocks is bounded over a
+            data channel: each round trip confines it to an interval as wide as that round trip,
+            whichever direction was the slow one, and every figure that depends on it is shown
+            as a range, however long the path. The range holds assuming stable clocks (no step,
+            no slew above 250 ppm). Where the true value sits inside it cannot be told from one
+            machine, and nothing in software narrows it further. Two tabs on one machine share
+            a clock but cannot prove it, so they read exact only when the round trip to the
+            server is a couple of milliseconds, as with a server on the same machine. The
+            player row needs no clock and is shown in every case.
           </p>
 
           <h3>Packet loss is per direction</h3>
@@ -180,10 +184,11 @@ const MeasurementHelp = ({
 
           <h3>Not included anywhere</h3>
           <p>
-            Camera sensor and image processing, the encoder queue ahead of the marker, and the
-            display itself. The display time is the browser&apos;s prediction of when the frame
-            will be shown, not an observation of it. The delay you can see by waving at the
-            camera is larger than any figure here.
+            These are frame stamp latencies, not glass to glass. Left out: camera sensor and
+            image processing, the encoder queue ahead of the marker, and the display itself.
+            The display time is the browser&apos;s prediction of when the frame will be shown,
+            not an observation of it. The delay you can see by waving at the camera is larger
+            than any figure here.
           </p>
         </div>
       </dialog>

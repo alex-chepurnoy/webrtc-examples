@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { MAX_SEQUENCE, findSeiPayload } from '../utils/frameStamp';
-import { MAX_TRUSTED_UNCERTAINTY_MS, MIN_SAMPLES, TIMER_RESOLUTION_MS } from './clockSync';
+import { MIN_SAMPLES, TIMER_RESOLUTION_MS, WIDE_RANGE_MS } from './clockSync';
 import {
   CLOCK_CHANNEL_LABEL,
   SENT_MEMORY,
@@ -203,10 +203,12 @@ describe('median', () => {
 
 describe('describeClock', () => {
   it('reports how far it is from having an answer while the window fills', () => {
-    const clock = describeClock(repeat(3, () => roundTrip({ rttMs: 10 })));
+    const clock = describeClock(repeat(MIN_SAMPLES - 1, () => roundTrip({ rttMs: 10 })));
     expect(clock.state).toBe('unknown');
     expect(clock.offsetMs).toBe(null);
-    expect(clock.reason).toBe(`Exchanging clock samples (3 of ${MIN_SAMPLES}).`);
+    expect(clock.warming).toBe(true);
+    expect(clock.resyncing).toBe(false);
+    expect(clock.reason).toBe(`Exchanging clock samples (${MIN_SAMPLES - 1} of ${MIN_SAMPLES}).`);
   });
 
   it('calls an offset of zero on a tight path exact rather than estimated', () => {
@@ -215,7 +217,8 @@ describe('describeClock', () => {
     expect(clock.exact).toBe(true);
     expect(clock.mode).toBe('same-clock');
     expect(clock.offsetMs).toBe(0);
-    expect(clock.uncertaintyMs).toBe(0.5 + TIMER_RESOLUTION_MS);
+    // Half the round trip, the padding on each side, and one more resolution for the stamp pair.
+    expect(clock.uncertaintyMs).toBeCloseTo(0.5 + 2 * TIMER_RESOLUTION_MS, 2);
   });
 
   // One browser is claimed only on proof that the frames are this page's own.
@@ -230,11 +233,11 @@ describe('describeClock', () => {
     expect(clock.state).toBe('ok');
     expect(clock.exact).toBe(false);
     expect(clock.mode).toBe('cross-machine');
-    expect(clock.offsetMs).toBe(4_000);
-    expect(clock.uncertaintyMs).toBe(10 + TIMER_RESOLUTION_MS);
+    expect(clock.offsetMs).toBeCloseTo(4_000, 2);
+    expect(clock.uncertaintyMs).toBeCloseTo(10 + 2 * TIMER_RESOLUTION_MS, 1);
   });
 
-  it('never claims one clock while it is refusing to measure', () => {
+  it('never claims one clock while the samples disagree', () => {
     const scattered = repeat(10, (i) => roundTrip({ rttMs: 4, offsetMs: i % 2 === 0 ? 0 : 900 }));
     expect(describeClock(scattered).exact).toBe(false);
     expect(describeClock(scattered).mode).toBe(null);
@@ -253,24 +256,56 @@ describe('describeClock', () => {
   // The first seconds of a session are not a failure and must not read as one.
   it('marks the first seconds as warming up, counting only usable samples', () => {
     const junk = repeat(MIN_SAMPLES, () => null);
-    const clock = describeClock([...junk, ...repeat(2, () => roundTrip())]);
+    const clock = describeClock([...junk, ...repeat(MIN_SAMPLES - 1, () => roundTrip())]);
     expect(clock.warming).toBe(true);
-    expect(clock.reason).toBe(`Exchanging clock samples (2 of ${MIN_SAMPLES}).`);
+    expect(clock.reason).toBe(`Exchanging clock samples (${MIN_SAMPLES - 1} of ${MIN_SAMPLES}).`);
   });
 
-  // Above the threshold there is no number at all: a confidently wrong latency is the failure.
-  it('refuses an offset whose bound is wider than the display policy allows', () => {
-    const rttMs = (MAX_TRUSTED_UNCERTAINTY_MS + 5) * 2;
+  // The old design refused above 30 ms; a long path is a wide range, answered and flagged.
+  it('answers over a long path with a wide range and says it is wide', () => {
+    const rttMs = (WIDE_RANGE_MS + 5) * 2;
     const clock = describeClock(repeat(10, () => roundTrip({ rttMs, offsetMs: 500 })));
-    expect(clock.state).toBe('untrusted');
-    expect(clock.reason).toContain('too uncertain');
+    expect(clock.state).toBe('ok');
+    expect(clock.reason).toBe(null);
+    expect(clock.wide).toBe(true);
+    expect(clock.offsetMs).toBeCloseTo(500, 2);
+    expect(clock.uncertaintyMs).toBeGreaterThan(WIDE_RANGE_MS);
   });
 
-  it('refuses when the samples disagree, and says so differently from a short window', () => {
+  it('does not call a tight range wide', () => {
+    const clock = describeClock(repeat(10, () => roundTrip({ rttMs: 20, offsetMs: 500 })));
+    expect(clock.wide).toBe(false);
+  });
+
+  // Two ways to have no range, told apart: not enough samples yet, and the clocks having moved.
+  it('says the clocks moved when enough samples exist but too few agree', () => {
     const scattered = repeat(10, (i) => roundTrip({ rttMs: 4, offsetMs: i % 2 === 0 ? 0 : 900 }));
     const clock = describeClock(scattered);
     expect(clock.state).toBe('unknown');
-    expect(clock.reason).toContain('not stable enough');
+    expect(clock.warming).toBe(false);
+    expect(clock.resyncing).toBe(true);
+    expect(clock.stepAgeMs).not.toBeNull();
+    expect(clock.reason).toContain('syncing again');
+  });
+
+  // A silent clock channel widens the range with the monotonic age of the newest sample.
+  it('reports the age of the newest sample and widens the range for it', () => {
+    const samples = repeat(10, () => roundTrip({ rttMs: 20, offsetMs: 500, t0: 1_000_000 }))
+      .map((sample) => ({ ...sample, m3: 5_000 }));
+    const fresh = describeClock(samples, { monoNow: 5_000 });
+    const silent = describeClock(samples, { monoNow: 5_000 + 30_000 });
+
+    expect(fresh.ageMs).toBe(0);
+    expect(silent.ageMs).toBe(30_000);
+    expect(silent.uncertaintyMs).toBeGreaterThan(fresh.uncertaintyMs + 7);
+  });
+
+  it('has no refusal state and no "too uncertain" wording for any round trip', () => {
+    for (const rttMs of [1, 50, 500, 5_000, 60_000]) {
+      const clock = describeClock(repeat(10, () => roundTrip({ rttMs, offsetMs: 500 })));
+      expect(clock.state).toBe('ok');
+      expect(JSON.stringify(clock)).not.toMatch(/untrusted|too uncertain/);
+    }
   });
 });
 
@@ -519,21 +554,22 @@ describe('the subscription', () => {
 
 /*
  * The combined page stamps and reads with one Date.now, but its clock samples still round-trip
- * through the Engine, which can push the bound past trusted and hide every figure. One context is
- * proven by the frames themselves, never by the page merely having a publisher running.
+ * through the Engine, which gives a wide range. One context is proven by the frames themselves,
+ * never by the page merely having a publisher running.
  */
 describe('one page that both stamps and reads', () => {
   // A wide bound around an offset of zero: the samples agree, the path is just slow.
-  const slowButZero = repeat(10, () =>
-    roundTrip({ rttMs: MAX_TRUSTED_UNCERTAINTY_MS * 3, offsetMs: 0 }));
+  const slowButZero = repeat(10, () => roundTrip({ rttMs: WIDE_RANGE_MS * 3, offsetMs: 0 }));
 
   const measuring = (overrides) => stateWith({
     stampedFrames: 3, lastFrameAt: 1_000, senderStatus: 'stamping', ...overrides,
   });
 
-  it('is refused when nothing says the two ends share a context', () => {
+  it('is a wide range, not exact, when nothing says the two ends share a context', () => {
     const clock = describeClock(slowButZero);
-    expect(clock.state).toBe('untrusted');
+    expect(clock.state).toBe('ok');
+    expect(clock.mode).toBe('cross-machine');
+    expect(clock.wide).toBe(true);
     expect(clock.exact).toBe(false);
   });
 
@@ -560,9 +596,12 @@ describe('one page that both stamps and reads', () => {
 
     expect(sample.clock.exact).toBe(false);
     expect(sample.clock.mode).not.toBe('same-context');
-    expect(sample.clock.state).toBe('untrusted');
-    expect(sample.clock.uncertaintyMs).toBe(40 + TIMER_RESOLUTION_MS);
-    expect(sample.transportMs).toBe(null);
+    expect(sample.clock.state).toBe('ok');
+    expect(sample.clock.mode).toBe('cross-machine');
+    // Half the 80 ms round trip, the padding on each side, and one more resolution for the stamps.
+    expect(sample.clock.uncertaintyMs).toBeCloseTo(40 + 2 * TIMER_RESOLUTION_MS, 1);
+    // The estimate lands on 0 by accident; the figure carries the range that says so.
+    expect(sample.transportMs).toBeCloseTo(100, 1);
   });
 
   it('is not exact while even one frame in the window came from somewhere else', () => {

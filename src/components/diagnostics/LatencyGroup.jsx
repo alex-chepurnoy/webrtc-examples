@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useSelector } from 'react-redux';
 
+import { DRIFT_RATE } from '../../diagnostics/clockSync';
 import {
   EMIT_INTERVAL_MS,
   STALE_MS,
@@ -15,6 +16,8 @@ import Sparkline from './Sparkline';
  * legs and the Engine) and this browser's jitter buffer, decode and display leg. Display only:
  * it renders what latencyProbe.js reports and computes nothing. Stalled, unstamped, unsupported
  * and unsyncable states each get a visible form, and none of them may show a plausible number.
+ * Across two machines a figure is always a range, however long the path: a long path widens it
+ * and says so, and never hides it.
  *
  * Every row explains itself in visible text or in the More info dialog, never in a title
  * tooltip alone, which keyboard and touch users cannot reach.
@@ -24,13 +27,16 @@ import Sparkline from './Sparkline';
  * The clock descriptor from the probe:
  *
  *   sample.clock = {
- *     state: 'ok' | 'unknown' | 'untrusted',
+ *     state: 'ok' | 'unknown',
  *     mode: 'same-context' | 'same-clock' | 'cross-machine' | null,
  *     exact: boolean,               // true when both ends read one clock
  *     offsetMs: number | null,      // far clock minus this clock
- *     uncertaintyMs: number | null, // rtt_min / 2 plus the Date.now resolution
+ *     uncertaintyMs: number | null, // bound on a one-way figure taken with the offset
  *     warming: boolean,             // still collecting the first clock samples
- *     reason: string | null,        // set when the offset could not be trusted
+ *     resyncing: boolean,           // the clocks moved and too few samples agree yet
+ *     wide: boolean,                // the bound passes WIDE_RANGE_MS: a hint, never a refusal
+ *     ageMs: number | null,         // time since the newest clock sample
+ *     reason: string | null,        // set when there is no range yet
  *   }
  *
  * A missing or unrecognized descriptor fails closed and suppresses the transport figures. The
@@ -44,8 +50,11 @@ import Sparkline from './Sparkline';
 const MODE_LABELS = {
   'same-context': "exact (this page's own stream)",
   'same-clock': 'exact (one clock)',
-  'cross-machine': 'estimated across two machines',
+  'cross-machine': 'bounded across two machines',
 };
+
+/* A clock channel quiet for longer than this is worth saying so: the range is widening. */
+const CLOCK_QUIET_AFTER_MS = 10_000;
 
 /* Re-render cadence for the age of the last sample. */
 const TICK_MS = 500;
@@ -73,6 +82,19 @@ const EMPTY_HISTORY = { transportMs: [], playerMs: [], totalMs: [] };
 
 const msFormat = (value) => Math.round(value) + ' ms';
 
+/*
+ * A one-way figure and the bound on its clock offset, as a range. A latency cannot be below
+ * zero, so a range that reaches below it is cut there and shown as "0 to N ms" rather than as
+ * a figure with a minus sign. A range wholly below zero cannot hold a latency at all, which
+ * means the assumption behind the bound (stable clocks) did not hold, and it is said so.
+ */
+const rangeText = (value, bound) => {
+  if (!Number.isFinite(bound)) return `${Math.round(value)} ms`;
+  if (value - bound >= 0) return `${Math.round(value)} ms \u00b1 ${Math.round(bound)} ms`;
+  if (value + bound < 0) return 'below 0 ms (the clocks moved)';
+  return `0 to ${Math.round(value + bound)} ms`;
+};
+
 const ms = (value) =>
   value === null || value === undefined || Number.isNaN(value)
     ? '\u2014'
@@ -97,7 +119,7 @@ const describeClock = (clock) => {
     };
   }
 
-  // The first seconds of a session, not a failure: say so rather than "too uncertain".
+  // The first seconds of a session, not a failure.
   if (clock.warming === true) {
     return {
       usable: false,
@@ -107,8 +129,18 @@ const describeClock = (clock) => {
     };
   }
 
+  // The clocks moved and the old samples were dropped: a few seconds, and the range returns.
+  if (clock.resyncing === true) {
+    return {
+      usable: false,
+      warming: true,
+      text: 'syncing clocks',
+      detail: clock.reason || 'The clocks moved while measuring; syncing again.',
+    };
+  }
+
   if (clock.reason) {
-    return { usable: false, text: 'too uncertain to measure', detail: clock.reason };
+    return { usable: false, text: 'clock unavailable', detail: clock.reason };
   }
 
   if (clock.exact === true) {
@@ -126,16 +158,37 @@ const describeClock = (clock) => {
   }
 
   if (Number.isFinite(clock.uncertaintyMs)) {
+    const quiet = Number.isFinite(clock.ageMs) && clock.ageMs > CLOCK_QUIET_AFTER_MS;
+    const parts = [
+      'The two ends have independent clocks. Each round trip over a data channel confines '
+      + 'the offset between them to an interval no wider than that round trip, whichever '
+      + 'direction was the slow one, and the range shown is half the narrowest combined '
+      + 'interval plus the clock resolution. The true value lies inside it, assuming stable '
+      + `clocks (no step, no slew above ${Math.round(DRIFT_RATE * 1e6)} ppm); nothing in software `
+      + 'can narrow it further without a shared reference. It applies to the publisher to '
+      + 'player row and the total, not to the player row.',
+    ];
+    if (clock.wide === true) {
+      parts.push(
+        'Wide because the path between the two ends is long; the true value lies anywhere in '
+        + 'the range. For an exact figure test on one machine.',
+      );
+    }
+    if (quiet) {
+      parts.push(
+        `Clock sync lost ${Math.round(clock.ageMs / 1000)} s ago, range widening.`,
+      );
+    }
     return {
       usable: true,
       exact: false,
       text: `\u00b1 ${Math.round(clock.uncertaintyMs)} ms`,
       uncertaintyMs: clock.uncertaintyMs,
-      detail: 'The two ends have independent clocks. The offset is estimated over a data '
-        + 'channel, and the bound shown is half the fastest round trip plus 1 ms of clock '
-        + 'resolution: the most a one-way figure taken from a round trip can be wrong by when '
-        + 'the two directions are not equally fast. It applies to the publisher to player row '
-        + 'and the total, not to the player row.',
+      // The qualifier rides in the label cell, so the value column stays as narrow as a figure
+      // and the graph keeps its room.
+      note: 'bound, assuming stable clocks'
+        + (quiet ? `, sync lost ${Math.round(clock.ageMs / 1000)} s ago` : ''),
+      detail: parts.join(' '),
     };
   }
 
@@ -299,11 +352,11 @@ const LatencyGroup = ({ connected, videoCodec = null }) => {
    * total need a usable clock. The player leg does not, so it shows whenever it was measured.
    */
   const bound = clock.usable && !clock.exact && Number.isFinite(clock.uncertaintyMs)
-    ? ` \u00b1 ${Math.round(clock.uncertaintyMs)} ms`
-    : '';
+    ? clock.uncertaintyMs
+    : null;
   const needsClock = (value) => {
-    if (!clock.usable || value === null || value === undefined) return '\u2014';
-    return `${ms(value)}${bound}`;
+    if (!clock.usable || !Number.isFinite(value)) return '\u2014';
+    return bound === null ? ms(value) : rangeText(value, bound);
   };
 
   // The head shows only what the rows cannot: that the figures are stale.
@@ -333,7 +386,7 @@ const LatencyGroup = ({ connected, videoCodec = null }) => {
           />
           <Row
             label="Clock"
-            note={clock.usable ? null : 'no transport figure without this'}
+            note={clock.usable ? clock.note : 'no transport figure without this'}
             value={clock.text}
             muted={!clock.usable && !clock.warming}
           />

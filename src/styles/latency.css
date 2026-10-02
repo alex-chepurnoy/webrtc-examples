@@ -64,7 +64,23 @@
   gap: 8px;
 }
 
-.wz-latency__label { flex: 0 1 auto; min-width: 0; }
+/*
+ * The room for the graph is reserved first and the label gives way: it wraps, down to a
+ * minimum width that still reads, instead of being kept on one line while the graph is
+ * squeezed out. The three measured rows then behave alike at the standard width, whatever
+ * their labels and values come to. The graph goes only when the panel itself is too narrow
+ * for label, graph and figure together (see the container rule below).
+ */
+.wz-latency__label { flex: 1 1 auto; min-width: 96px; }
+.wz-latency__label-row .wz-spark-slot { flex: 0 0 62px; }
+
+.wz-latency { container-type: inline-size; container-name: wz-latency; }
+
+/* Below this the three cells cannot hold a label of readable width, the graph and a figure
+   such as "100 ms ± 11 ms"; the graph is context, so it is the part that goes. */
+@container wz-latency (max-width: 340px) {
+  .wz-latency__label-row .wz-spark-slot { display: none; }
+}
 
 .wz-latency__value {
   padding: 5px 12px;

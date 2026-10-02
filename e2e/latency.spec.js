@@ -1204,9 +1204,9 @@ test.describe('a stopped session lets go', () => {
 
     const clockRow = page.locator('.wz-latency__table tr').filter({ hasText: 'Clock' }).first();
     // The frames are another page's, so "this page's own stream" is the one wrong reading. What
-    // is right depends on the round trip: exact (one clock) against a local Engine, an estimate
-    // with its bound, or a refusal, further away.
-    await expect(clockRow).toContainText(/exact \(one clock\)|\u00b1|syncing|too uncertain/,
+    // is right depends on the round trip: exact (one clock) against a local Engine, a range
+    // with its bound further away, or the first seconds of syncing.
+    await expect(clockRow).toContainText(/exact \(one clock\)|\u00b1|syncing/,
       { timeout: 15_000 });
     await expect(clockRow, 'a stale stamping flag claimed this page\'s own stream')
       .not.toContainText("this page's own stream");
@@ -1564,6 +1564,20 @@ test.describe('the combined page clock', () => {
     }
     for (const name of ['Clock', 'Frames missed']) {
       await expect(row(name).locator('.wz-spark')).toHaveCount(0);
+    }
+
+    // The room for the graph is reserved before the label (which wraps instead), so all three
+    // measured rows keep theirs at the standard viewport. The graph is dropped only when the
+    // panel itself is too narrow for label, graph and figure together.
+    await page.locator('.wz-latency').evaluate((el) => { el.style.width = '280px'; });
+    for (const name of ['Publisher to player', 'Player jitter buffer', 'Total']) {
+      await expect(row(name).locator('.wz-spark svg')).toHaveCount(0);
+      // The figure itself never gives way.
+      await expect(row(name)).toContainText(/\d+\s*ms/);
+    }
+    await page.locator('.wz-latency').evaluate((el) => { el.style.width = ''; });
+    for (const name of ['Publisher to player', 'Player jitter buffer', 'Total']) {
+      await expect(row(name).locator('.wz-spark svg')).toBeVisible();
     }
   });
 });
