@@ -302,21 +302,31 @@ Publisher to player and Clock rows after about 30 seconds of each run.
 1. **One machine, two windows.** Publisher in one browser window, player in another. Against
    a nearby Engine the Clock row reads exact (one clock). Against a distant one it reads a
    range, and the true offset is zero, which must be inside it.
-2. **Two machines, a delay in one direction at a time.** Record a baseline with no delay, then
-   add 20, 50 and 100 ms with Clumsy (Windows) or `tc netem` (Linux) on **one** machine. A
-   delay on the media flow also delays the video, so it changes the true transport as well,
-   which is why each direction is a separate run:
+2. **Two machines, a delay in one direction at a time.** Record a baseline with no delay,
+   then add 20, 50 and 100 ms with Clumsy (Windows) or `tc netem` (Linux) on **one**
+   machine. Both tools need administrator rights. A delay on the media flow also delays the
+   video, so it changes the true transport as well, which is why each direction is a
+   separate run:
 
    | Delay on | Applied to | True Publisher to player |
    |---|---|---|
-   | The player machine, outbound only | Clock pings and RTCP, not video | The baseline |
+   | The player machine, outbound only | Clock pings and RTCP, not video | Unchanged from the baseline |
    | The player machine, inbound | Video and clock replies | The baseline plus the delay |
 
    Clumsy filters inbound and outbound separately, so set one. `tc netem` on an interface
-   delays egress only; delaying ingress takes an `ifb` device. The pass criterion is that the
-   displayed range **contains the truth** from the table. Also record the observed error:
-   theory says its size is half the delay, because the estimate moves by half the asymmetry.
-   An error well beyond half the delay, or a truth outside the range, is a failure.
+   delays egress only; delaying ingress takes an `ifb` device.
+
+   The true baseline transport is not known, only its displayed centre `c0` with bound `b0`,
+   and that centre carries the path's own asymmetry error, so the truth lies in
+   `c0 - b0` to `c0 + b0`. Judge each delayed run against that interval, not against `c0`
+   as if it were exact. With `d` the delay, a run passes when both hold:
+   - the delayed run's displayed range overlaps the expected truth: the baseline interval
+     for the outbound run, the same interval moved up by `d` for the inbound run;
+   - the displayed centre moved from `c0` by about `d / 2` (the estimate moves by half the
+     asymmetry), give or take `b0` plus the new bound.
+
+   A centre that did not move (the estimator ignored the delay), moved by about `d`, or a
+   displayed range clear of the expected truth is a failure.
 3. **A clock step.** Switch off automatic time on the publisher machine, move its clock by
    2 seconds mid-run, and watch the Clock row. It should read "syncing clocks" within a few
    seconds and return to a range on the new offset within about 10 seconds. A step smaller

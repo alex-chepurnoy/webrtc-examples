@@ -152,8 +152,10 @@ test.describe('the clock range against an injected truth', () => {
       await viewer.waitForTimeout(6000);
       const clock = await readClock(viewer);
       const error = clock.offsetMs - 2000;
-      expect(error, `error ${error}`).toBeGreaterThan(20);
-      expect(error, `error ${error}`).toBeLessThan(42);
+      // 30 ms expected; the band leaves room for the real path's own asymmetry, and still
+      // fails an estimator that ignores the delay (about 0) or doubles it (about 60).
+      expect(error, `error ${error}`).toBeGreaterThan(10);
+      expect(error, `error ${error}`).toBeLessThan(50);
       expect(clock.uncertaintyMs).toBeGreaterThan(Math.abs(error));
       await expectContains(viewer, 2000);
       await expectNoRefusal(viewer);
@@ -171,8 +173,8 @@ test.describe('the clock range against an injected truth', () => {
       await viewer.waitForTimeout(6000);
       const clock = await readClock(viewer);
       const error = clock.offsetMs - 2000;
-      expect(error, `error ${error}`).toBeLessThan(-20);
-      expect(error, `error ${error}`).toBeGreaterThan(-42);
+      expect(error, `error ${error}`).toBeLessThan(-10);
+      expect(error, `error ${error}`).toBeGreaterThan(-50);
       expect(clock.uncertaintyMs).toBeGreaterThan(Math.abs(error));
       await expectContains(viewer, 2000);
     } finally {
@@ -193,7 +195,7 @@ test.describe('the clock range against an injected truth', () => {
 
       const group = viewer.locator('.wz-latency');
       await expect(group).toContainText('assuming stable clocks');
-      await expect(group).toContainText('Wide because the path between the two ends is long');
+      await expect(group).toContainText('Wide because the path between the two ends is long or uneven');
       await expect(group.locator('.wz-latency__table tr', { hasText: 'Publisher to player' })).toContainText(/±|0 to/);
       await expectNoRefusal(viewer);
     } finally {
