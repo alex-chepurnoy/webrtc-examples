@@ -409,6 +409,40 @@ test.describe('rendition hint', () => {
     await expect(hint).toContainText('which renditions of this stream are live');
     await expect(page.locator('#play-find-renditions')).toBeEnabled();
   });
+
+  // Answers the page's listing request from the test, so no Engine is needed. Real Engines
+  // refuse a listing on an application with EnableQuery off (400), but an empty list has been
+  // seen from one as well, so the page must not read an empty list as proof of an idle application.
+  const answerListingWith = async (page, reply) => {
+    await page.routeWebSocket(/webrtc-session\.json/, (ws) => {
+      ws.onMessage((raw) => {
+        if (JSON.parse(String(raw)).messageType === 'GET_AVAILABLE_STREAMS') ws.send(JSON.stringify(reply));
+      });
+    });
+    await page.goto('/#/play');
+    await page.fill('#playSignalingURL', 'wss://engine.example/webrtc-session.json');
+    await page.fill('#playApplicationName', 'quiet');
+    await page.fill('#playStreamName', 'someStream');
+    await page.locator('#play-find-renditions').click();
+  };
+
+  test('an empty list says nothing was listed and that listing may be off', async ({ page }) => {
+    await answerListingWith(page, { statusCode: 200, availableStreams: [] });
+
+    const hint = page.locator('#playRendition-hint');
+    await expect(hint).toContainText('The Engine listed no streams on the application "quiet".');
+    await expect(hint).toContainText('Either nothing is live there, or stream listing is turned off for it');
+    await expect(hint).toContainText('EnableQuery');
+    await expect(hint).toContainText('Query Published Stream Names');
+    await expect(hint).not.toContainText('Nothing is live on');
+  });
+
+  test('a refused listing shows the reason the Engine gave', async ({ page }) => {
+    const reason = 'Application quiet does not have WebRTC stream query enabled.';
+    await answerListingWith(page, { statusCode: 400, statusDescription: reason });
+
+    await expect(page.locator('#playRendition-hint')).toContainText(`answered with an error: ${reason}`);
+  });
 });
 
 /*

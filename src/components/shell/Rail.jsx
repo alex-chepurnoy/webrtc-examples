@@ -83,7 +83,7 @@ const PAGES = [
 ];
 
 const UTILITIES = [
-  { href: 'https://www.wowza.com/docs/wowza-streaming-engine-product-articles', label: 'Docs', Icon: DocsIcon },
+  { href: 'https://www.wowza.com/docs/webrtc-workflows-in-wowza-streaming-engine', label: 'Docs', Icon: DocsIcon },
   { href: 'https://developer.wowza.com', label: 'Developer Portal', Icon: PortalIcon },
   { href: 'https://github.com/WowzaMediaSystems/webrtc-examples', label: 'GitHub', Icon: GitHubIcon },
 ];

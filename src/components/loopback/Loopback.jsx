@@ -15,6 +15,7 @@ import StatsBar from '../diagnostics/StatsBar';
 import SimulcastLayers from '../diagnostics/SimulcastLayers';
 import LatencyGroup from '../diagnostics/LatencyGroup';
 import CopyFromPublisher from './CopyFromPublisher';
+import LoopbackChat from './LoopbackChat';
 import DebugPanel from '../diagnostics/DebugPanel';
 import Stage from '../shell/Stage';
 import Inspector from '../shell/Inspector';
@@ -99,6 +100,8 @@ const Loopback = () => {
             <StatsBar stats={play.stats} history={play.history} connectionState={play.connectionState} role="play" />
           </section>
         </div>
+
+        <LoopbackChat />
 
         <p className="wz-stage__note">
           Each side is its own peer connection, so the two sets of figures are independent.

@@ -36,7 +36,15 @@ const describeLookup = (lookup, streamName, rids) => {
       + (result.message ? `: ${result.message}` : '.');
   }
   if (result.status !== LOOKUP_OK) return `Could not reach the Engine at ${lookupUrl}.`;
-  if (result.streams.length === 0) return `Nothing is live on the application "${applicationName}".`;
+  // An empty list is not proof that nothing is live. The Engine refuses a listing on an
+  // application with stream listing turned off (the 400 above), but QA reported an empty list
+  // coming back in that case too, which has not been reproduced, so the message names both
+  // possible causes rather than claiming one.
+  if (result.streams.length === 0) {
+    return `The Engine listed no streams on the application "${applicationName}". Either nothing is live there,`
+      + ' or stream listing is turned off for it (the Engine setting EnableQuery, shown in Manager'
+      + ' as "Query Published Stream Names").';
+  }
 
   const found = renditionsFor(streamName, result.streams, rids);
   if (found.length > 0) {

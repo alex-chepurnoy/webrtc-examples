@@ -115,11 +115,30 @@ describe('PlayRenditionSelect', () => {
     expect(hint()).toHaveTextContent(`The Engine at ${URL_A} answered with an error: Application not found`);
   });
 
-  it('says an application with nothing live is empty, not unreachable', async () => {
+  // An empty list could be an idle application or one with stream listing off, so it must
+  // say nothing was listed and name both causes, not claim that nothing is live.
+  it('says an empty list was empty, and that listing may be turned off', async () => {
     setup();
     find();
     await answer(0, { status: LOOKUP_OK, streams: [] });
-    expect(hint()).toHaveTextContent('Nothing is live on the application "webrtc".');
+    expect(hint()).toHaveTextContent('The Engine listed no streams on the application "webrtc".');
+    expect(hint()).toHaveTextContent('Either nothing is live there, or stream listing is turned off for it');
+    expect(hint()).toHaveTextContent('EnableQuery');
+    expect(hint()).toHaveTextContent('Query Published Stream Names');
+    expect(hint()).not.toHaveTextContent('Nothing is live on');
+  });
+
+  it('shows the Engine’s own reason when stream listing is refused', async () => {
+    setup();
+    find();
+    await answer(0, {
+      status: LOOKUP_ERROR,
+      code: 400,
+      message: 'Application webrtc does not have WebRTC stream query enabled.',
+    });
+    expect(hint()).toHaveTextContent(
+      `The Engine at ${URL_A} answered with an error: Application webrtc does not have WebRTC stream query enabled.`
+    );
   });
 
   it('announces the result', () => {

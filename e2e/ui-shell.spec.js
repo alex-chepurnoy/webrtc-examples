@@ -177,6 +177,16 @@ test.describe('shell alignment', () => {
 });
 
 
+test.describe('rail links', () => {
+  // The WebRTC workflows article is the page that explains what this example drives.
+  test('Docs opens the WebRTC workflows article', async ({ page }) => {
+    await page.goto('/#/publish');
+    await expect(page.getByRole('link', { name: 'Docs' }))
+      .toHaveAttribute('href', 'https://www.wowza.com/docs/webrtc-workflows-in-wowza-streaming-engine');
+  });
+});
+
+
 test.describe('status badges', () => {
   test('LIVE appears at the right end of the topbar, not in the rail', async ({ page }) => {
     await page.goto('/#/publish');
