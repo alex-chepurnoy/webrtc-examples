@@ -270,6 +270,75 @@ narrow it without an external reference: a route that is consistently asymmetric
 uplink much slower than the downlink on a phone hotspot, puts the estimate off by half the
 asymmetry, with full confidence. The error stays inside the range shown, and it is not zero.
 
+#### Validating the range
+
+The claim to validate is containment: the true offset between the two clocks lies inside the
+range the Clock row stands behind, for any path, whatever the asymmetry. Three layers check
+it, from cheap to expensive.
+
+- **Unit oracle** (`src/diagnostics/clockSync.test.js`). A seeded synthetic world with a known
+  offset: offsets up to a minute, drift up to 200 ppm against the 250 ppm assumed, both clocks
+  floored independently the way `Date.now()` does, round trips from 1 to 500 ms, paths that are
+  entirely one-way, one-sided queueing, and replies held for seconds. 6000 trials; the truth
+  must be inside the bound in every one, and the bound may be no wider than the fastest sample,
+  the padding and the drift allow.
+- **Two pages, one machine, a simulated remote clock** (`e2e/clock-range.spec.js`). The
+  end-to-end build (`--mode e2e`, never a production build) honors
+  `window.__wzClockTest = { skewMs, forwardDelayMs, reverseDelayMs }`. `skewMs` makes a page's
+  probe read a clock that far ahead, so the true offset is known exactly; the delays hold a
+  clock ping or reply back after its timestamp was taken, so one direction is slow by a
+  chosen amount. The spec asserts the descriptor against the injected skew, checks that 60 ms
+  in one direction moves the estimate by about 30 ms and stays inside the range, shows a
+  500 ms round trip as a wide range, and steps the far clock mid-run. The build exposes
+  `window.__wzClockTestLive` and the descriptor reader `window.__wzClockProbe()` so a stale
+  preview server fails the first test instead of passing silently.
+- **Two real machines.** The protocol below. Run it before quoting a cross-machine figure.
+
+##### Manual protocol
+
+Turn the probe on at both ends, open the share link on the second machine, and read the
+Publisher to player and Clock rows after about 30 seconds of each run.
+
+1. **One machine, two windows.** Publisher in one browser window, player in another. Against
+   a nearby Engine the Clock row reads exact (one clock). Against a distant one it reads a
+   range, and the true offset is zero, which must be inside it.
+2. **Two machines, a delay in one direction at a time.** Record a baseline with no delay,
+   then add 20, 50 and 100 ms with Clumsy (Windows) or `tc netem` (Linux) on **one**
+   machine. Both tools need administrator rights. A delay on the media flow also delays the
+   video, so it changes the true transport as well, which is why each direction is a
+   separate run:
+
+   | Delay on | Applied to | True Publisher to player |
+   |---|---|---|
+   | The player machine, outbound only | Clock pings and RTCP, not video | Unchanged from the baseline |
+   | The player machine, inbound | Video and clock replies | The baseline plus the delay |
+
+   Clumsy filters inbound and outbound separately, so set one. `tc netem` on an interface
+   delays egress only; delaying ingress takes an `ifb` device.
+
+   The true baseline transport is not known, only its displayed centre `c0` with bound `b0`,
+   and that centre carries the path's own asymmetry error, so the truth lies in
+   `c0 - b0` to `c0 + b0`. Judge each delayed run against that interval, not against `c0`
+   as if it were exact. With `d` the delay, a run passes when both hold:
+   - the delayed run's displayed range overlaps the expected truth: the baseline interval
+     for the outbound run, the same interval moved up by `d` for the inbound run;
+   - the displayed centre moved from `c0` by about `d / 2` (the estimate moves by half the
+     asymmetry), give or take `b0` plus the new bound.
+
+   A centre that did not move (the estimator ignored the delay), moved by about `d`, or a
+   displayed range clear of the expected truth is a failure.
+3. **A clock step.** Switch off automatic time on the publisher machine, move its clock by
+   2 seconds mid-run, and watch the Clock row. It should read "syncing clocks" within a few
+   seconds and return to a range on the new offset within about 10 seconds. A step smaller
+   than the round trip is inside the intervals and is not detected; that is the documented
+   limit.
+4. **A physical reference.** Turn on the burned-in clock on the publisher, photograph the
+   publisher's preview and the player's screen side by side, and read the difference between
+   the two times. Compare it with the panel's total, plus an allowance for what the probe
+   leaves out (camera capture, the encoder queue, panel emission) that you size yourself with
+   the 240 fps calibration described under [what the numbers
+   exclude](#what-the-numbers-exclude). This checks the whole figure, not only the clock.
+
 #### Browser and codec support, today
 
 - **Chromium only.** The probe uses `RTCRtpSender.createEncodedStreams()` and its receiver

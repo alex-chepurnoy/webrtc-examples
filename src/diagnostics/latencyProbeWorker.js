@@ -7,15 +7,21 @@
  * Messages in:   { op: 'sender' | 'receiver', readable, writable, stamp }   start, once
  *                { op: 'stamp', stamp }                                      codec decision
  *                { op: 'stop' }                                              pass through
+ *                { op: 'clock-test', skewMs }                                test builds only
  * Messages out:  ready, sent { rung, sequence, sentAt }, refused { layout }, frame (see readFrame),
  *                error, ended
  */
 
+import { CLOCK_TEST_HOOK } from './clockTestHook';
 import { createFrameStamper, readFrame } from './frameTransforms';
 
 let wanted = false;
 let stopped = false;
 let reported = false;
+
+// The test hook's clock skew, posted by the page (see clockTestHook.js). Zero in production.
+let testSkewMs = 0;
+const now = () => Date.now() + testSkewMs;
 
 // Said once, because a broken transform would otherwise say it 60 times a second.
 const fail = (label, error) => {
@@ -28,6 +34,7 @@ const start = ({ op, readable, writable, stamp }) => {
   wanted = stamp === true;
   const stamper = createFrameStamper({
     onRefused: (layout) => self.postMessage({ op: 'refused', layout }),
+    now,
   });
 
   const perFrame = op === 'sender'
@@ -35,7 +42,7 @@ const start = ({ op, readable, writable, stamp }) => {
       const sent = stamper(frame, wanted);
       if (sent) self.postMessage({ op: 'sent', ...sent });
     }
-    : (frame) => self.postMessage({ op: 'frame', ...readFrame(frame) });
+    : (frame) => self.postMessage({ op: 'frame', ...readFrame(frame, now) });
 
   readable
     .pipeThrough(new TransformStream({
@@ -59,6 +66,9 @@ const start = ({ op, readable, writable, stamp }) => {
 self.onmessage = ({ data: message }) => {
   if (!message) return;
   if (message.op === 'stamp') wanted = message.stamp === true;
+  else if (CLOCK_TEST_HOOK && message.op === 'clock-test') {
+    if (Number.isFinite(message.skewMs)) testSkewMs = message.skewMs;
+  }
   else if (message.op === 'stop') stopped = true;
   else if (message.op === 'sender' || message.op === 'receiver') start(message);
 };

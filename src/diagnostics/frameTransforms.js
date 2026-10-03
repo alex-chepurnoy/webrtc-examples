@@ -102,12 +102,12 @@ export const createFrameStamper = ({ now = () => Date.now(), onRefused = null } 
  * What the player learns from one encoded frame, before it is decoded. Arrival is taken before
  * the frame is parsed, so parsing is never counted as path delay.
  *
- * `arrivedAt` is Date.now, the clock the publisher stamped with. `arrivedAtAbs` is
+ * `arrivedAt` is Date.now (or `now`, which the tests skew), the clock the publisher stamped with. `arrivedAtAbs` is
  * performance.timeOrigin + performance.now(): a worker has its own timeOrigin, so the caller
  * subtracts the page's to put arrival on the timeline requestVideoFrameCallback reports on.
  */
-export const readFrame = (frame) => {
-  const arrivedAt = Date.now();
+export const readFrame = (frame, now = () => Date.now()) => {
+  const arrivedAt = now();
   const arrivedAtAbs = performance.timeOrigin + performance.now();
   const stamp = findSeiPayload(frame.data);
   if (stamp === null) return { stamp: null };
