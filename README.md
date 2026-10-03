@@ -14,7 +14,7 @@ Welcome to the official Wowza Media Systems Web Real-time Communication (WebRTC)
   - [Set up WebRTC](#set-up-webrtc)
   - [What's new in v2](#whats-new-in-v2)
   - [Diagnostics in the v2 example](#diagnostics-in-the-v2-example)
-  - [Glass-to-glass latency probe](#glass-to-glass-latency-probe)
+  - [Frame stamp latency probe](#frame-stamp-latency-probe)
   - [Combined publisher and player](#combined-publisher-and-player)
   - [Running the tests](#running-the-tests)
   - [Directory Structure](#directory-structure)
@@ -55,24 +55,27 @@ calculated as half the round trip time plus the jitter buffer delay over the las
 labelled as such on screen. It covers the network leg and the jitter buffer only. It does
 **not** include capture, encode, processing inside Wowza Streaming Engine, decode, or the
 display pipeline, so true glass-to-glass latency is higher than the figure shown. To
-measure the whole path from the publisher's encoder instead of estimating around it, use the
-[glass-to-glass latency probe](#glass-to-glass-latency-probe) below.
+measure the path from the publisher's encoder instead of estimating around it, use the
+[frame stamp latency probe](#frame-stamp-latency-probe) below.
 
 **Server communication** is a collapsible log of the exchange with the Engine: signaling
 frames in both directions, the WHIP/WHEP HTTP calls, ICE candidates and peer-connection
 state changes. It is collapsed by default, can be filtered by channel, and has a Copy
 button for attaching to a support ticket.
 
-### Glass-to-glass latency probe
+### Frame stamp latency probe
 
 The connection statistics above estimate the network leg from RTCP counters. The latency
-probe measures something different: how long frames take from the publisher's encoder to
-the player's screen, reported as the median over the last 120 frames or fewer, and split at
-the point where the player reads the frame off the wire.
+probe measures something different: the **frame stamp latency**, how long frames take from
+just after the publisher's encoder to the point where the player expects to show them,
+reported as the median over the last 120 frames or fewer, and split at the point where the
+player reads the frame off the wire. It is not glass-to-glass latency in the physical sense,
+which starts at the camera sensor and ends at light leaving the panel; the next section lists
+what is left out.
 
 **It is a diagnostic, not a production metric.** It is off by default, it needs Chromium
-and H.264, it installs a per-frame transform at both ends, and it reports nothing at all
-when it cannot stand behind the number. Use it to answer "where is the latency going" on a
+and H.264, it installs a per-frame transform at both ends, and across two machines it
+shows a range, never a bare number. Use it to answer "where is the latency going" on a
 particular stream on a particular day. Do not put it on a dashboard and do not quote it as
 a product specification.
 
@@ -211,8 +214,8 @@ trustworthy rather than merely small.
 So the total is end to end minus capture, encode queue and panel. Real glass to glass is
 higher, by a bias that is roughly fixed for a given machine and camera. Sizing that bias
 takes a one-time calibration with a high frame rate camera (240 fps) pointed at both
-screens at once. Until someone does that, quote the probe's number as what it measures and
-not as glass to glass.
+screens at once. Until someone does that, quote the probe's number as the frame stamp
+latency it measures and not as glass to glass.
 
 #### Clocks, and why the testing mode matters
 
@@ -225,8 +228,8 @@ every mode.
 | How you are testing | Clock relationship | What the Clock row reads |
 |---|---|---|
 | Publish + Play, playing its own stream | One clock, proven: every frame measured is one this page stamped | **exact** (this page's own stream) |
-| Two browsers or two tabs, one machine | The same OS clock, but nothing proves it | **exact** (one clock) when the round trip to the Engine is about 2 ms or less, as with a local Engine; otherwise **estimated**, plus or minus N ms |
-| Two machines | Independent clocks | **estimated**, plus or minus N ms, always shown |
+| Two browsers or two tabs, one machine | The same OS clock, but nothing proves it | **exact** (one clock) when the round trip to the Engine is about 2 ms or less, as with a local Engine; otherwise a range, plus or minus N ms |
+| Two machines | Independent clocks | A range, plus or minus N ms, always shown |
 
 The first row is proven from the frames, not assumed: the page remembers every stamp it
 wrote and claims one clock only when every frame in the window matches one of them in rung,
@@ -234,26 +237,38 @@ sequence and send time. The offset is then exactly zero, whatever the Engine's d
 page that publishes one stream and plays another is not in this row.
 
 Two browsers on one machine share a clock, but the probe has no way to prove that. It
-estimates the offset the same way as for two machines, and it can only call the result exact
-when the estimate is within 2 ms of zero with a bound of 2 ms or less, which needs a round
-trip of about 2 ms. Against a remote Engine the same setup reads as an estimate with its
-bound, which is honest: it is an estimate.
+bounds the offset the same way as for two machines, and it can only call the result exact
+when the estimate is within 2 ms of zero with a bound of about 2 ms (2.5 ms allowed for the
+drift on a sample a second or two old), which needs a round
+trip of about 2 ms. Against a remote Engine the same setup reads as a range, which is
+honest: the probe cannot tell it from two machines.
 
-For anything but the first row the probe estimates the offset over a dedicated `wz-clock`
-data channel, NTP style, and keeps the lowest round trip in a rolling window, since the
-fastest sample carries the least queuing asymmetry. The uncertainty shown is half that
-minimum round trip plus 1 ms for the resolution of `Date.now()`, which bounds how far path
-asymmetry can have pushed the estimate. It is shown on the Publisher to player row and the
-total, so there is no bare figure in the two-machine case. For the first few seconds the
-Clock row reads "syncing clocks". If the uncertainty is too large (over 30 ms), or the
-estimate is unstable across the window, the probe shows "too uncertain to measure" and no
-transport figure at all. A confidently wrong number is the failure this instrument exists to
-remove.
+For anything but the first row the probe bounds the offset over a dedicated `wz-clock`
+data channel, NTP style. Every round trip confines the offset to an interval: the far
+clock minus ours is at most `t1 - t0` (the forward leg cannot take negative time) and at
+least `t2 - t3` (neither can the reverse leg), so the interval is as wide as the round trip
+with the far end's turnaround taken out. That holds for **any** split between the two
+directions. The intervals from a rolling window of about 20 seconds are intersected; the
+tightest upper bound and the tightest lower bound may come from different samples, so the
+result is never wider than the fastest round trip and is usually narrower. The offset used
+is the midpoint of the intersection, and half its width, plus the resolution of
+`Date.now()`, is the range shown on the Publisher to player row and the total. There is no
+bare figure in the two-machine case, and no threshold above which the probe gives up: a long
+path gives a wide range, marked as wide, and the true value lies anywhere inside it.
 
-One weakness of the estimate is worth stating plainly: a route that is consistently
-asymmetric, such as an uplink much slower than the downlink on a phone hotspot, produces a
-stable and confident offset estimate that is wrong, and no round-trip method can detect
-that. The error stays inside the bound shown, but it is not zero.
+What the range assumes is stated wherever it is shown: **stable clocks**, meaning no clock
+step and no slew above 250 ppm inside the window. Drift inside that rate is widened for,
+using a monotonic clock for the ages so that a change of the system clock cannot corrupt
+them, and a quiet clock channel widens the range smoothly (the Clock row says when sync was
+lost). A step larger than the sample intervals is detected, the older samples are dropped
+and the Clock row reads "syncing clocks" for a few seconds. A step smaller than the
+intervals is not detected and shifts the estimate by about its size. For the first few
+seconds the Clock row reads "syncing clocks" as well, until three samples agree.
+
+Where the truth sits inside the range is a different matter, and nothing in software can
+narrow it without an external reference: a route that is consistently asymmetric, such as an
+uplink much slower than the downlink on a phone hotspot, puts the estimate off by half the
+asymmetry, with full confidence. The error stays inside the range shown, and it is not zero.
 
 #### Browser and codec support, today
 

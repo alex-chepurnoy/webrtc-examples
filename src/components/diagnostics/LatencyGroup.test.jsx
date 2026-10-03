@@ -32,7 +32,7 @@ const sampleWith = (overrides = {}) => ({
   lastFrameAt: Date.now(),
   clock: {
     state: 'ok', mode: 'cross-machine', exact: false, offsetMs: 300, uncertaintyMs: 11,
-    warming: false, reason: null,
+    warming: false, resyncing: false, wide: false, ageMs: 0, reason: null,
   },
   ...overrides,
 });
@@ -89,17 +89,60 @@ describe('LatencyGroup', () => {
     expect(screen.queryByText(/too uncertain/)).toBeNull();
   });
 
-  it('still shows the player leg when the clock is refused', () => {
+  // The clocks moved: the old samples are gone and the range is back in a few seconds.
+  it('shows the player leg while syncing again after the clocks moved', () => {
     show(sampleWith({
       transportMs: null,
       totalMs: null,
       clock: {
-        state: 'untrusted', mode: null, exact: false, offsetMs: 0, uncertaintyMs: 41,
-        warming: false, reason: 'Clock offset too uncertain to measure (± 41 ms).',
+        state: 'unknown', mode: null, exact: false, offsetMs: null, uncertaintyMs: null,
+        warming: false, resyncing: true,
+        reason: 'The clocks moved while measuring (a clock step or drift); syncing again.',
       },
     }));
     expect(rowValue('Player jitter buffer')).toBe('20 ms');
-    expect(rowValue('Clock')).toBe('too uncertain to measure');
+    expect(rowValue('Publisher to player')).toBe('\u2014');
+    expect(rowValue('Clock')).toBe('syncing clocks');
+    expect(screen.queryByText(/too uncertain/)).toBeNull();
+  });
+
+  // A long path is a wide range with a hint, never a refusal.
+  it('shows a very wide range, with the hint, instead of hiding it', () => {
+    show(sampleWith({
+      transportMs: 100,
+      totalMs: 120,
+      clock: {
+        state: 'ok', mode: 'cross-machine', exact: false, offsetMs: 300, uncertaintyMs: 250,
+        warming: false, resyncing: false, wide: true, ageMs: 100, reason: null,
+      },
+    }));
+    expect(rowValue('Publisher to player')).toBe('0 to 350 ms');
+    expect(rowValue('Total')).toBe('0 to 370 ms');
+    expect(rowValue('Clock')).toBe('± 250 ms');
+    expect(screen.getByText('bound, assuming stable clocks')).toBeTruthy();
+    expect(screen.getByText(/Wide because the path between the two ends is long or uneven/)).toBeTruthy();
+    expect(screen.queryByText(/too uncertain/)).toBeNull();
+  });
+
+  it('writes a range that stays above zero as a figure with its bound', () => {
+    show(sampleWith({
+      transportMs: 100,
+      clock: {
+        state: 'ok', mode: 'cross-machine', exact: false, offsetMs: 300, uncertaintyMs: 100,
+        warming: false, resyncing: false, wide: true, ageMs: 0, reason: null,
+      },
+    }));
+    expect(rowValue('Publisher to player')).toBe('100 ms ± 100 ms');
+  });
+
+  it('says when the clock channel has gone quiet and the range is widening', () => {
+    show(sampleWith({
+      clock: {
+        state: 'ok', mode: 'cross-machine', exact: false, offsetMs: 300, uncertaintyMs: 14,
+        warming: false, resyncing: false, wide: false, ageMs: 25_000, reason: null,
+      },
+    }));
+    expect(screen.getByText(/Clock sync lost 25 s ago, range widening/)).toBeTruthy();
   });
 
   // One threshold: the probe's own stalled status, not a second timer in the panel.

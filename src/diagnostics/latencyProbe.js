@@ -43,12 +43,12 @@ import { MAX_SEQUENCE } from '../utils/frameStamp';
 import attachDataChannel from '../webrtc/attachDataChannel';
 import {
   CLOCK_GRANULARITY_MS,
-  MAX_TRUSTED_UNCERTAINTY_MS,
   MIN_SAMPLES,
+  SETTLED_SAMPLES,
   TIMER_RESOLUTION_MS,
+  WIDE_RANGE_MS,
   WINDOW_SAMPLES,
-  countUsableSamples,
-  estimateOffset,
+  estimateClock,
 } from './clockSync';
 import {
   createFrameStamper,
@@ -132,58 +132,73 @@ export const median = (values) => {
 
 /**
  * What the clock exchange currently supports. Zero never stands in for "unknown": state 'ok'
- * with offsetMs 0 is a measurement, state 'unknown' is a refusal.
+ * with offsetMs 0 is a measurement, state 'unknown' is "no range yet".
+ *
+ * There is no refusal on width. A long path gives a wide range, and the range is shown; only
+ * the absence of samples (warming up, or syncing again after the clocks moved) withholds a
+ * figure. `uncertaintyMs` is the bound to put on a one-way figure taken with this offset: it
+ * is the offset's own half-width plus one more timer resolution, because the two ends of the
+ * frame (sentAt and arrivedAt) are floored independently of the clock exchange.
+ *
+ * Flags: `wide` (the bound passes WIDE_RANGE_MS, a hint only), `ageMs` (time since the newest
+ * sample, which the bound already widens for), `stepAgeMs` (how far back the estimator found
+ * the clocks disagreeing, when it did), `resyncing` (a disagreement left too few samples).
  *
  * `sameContext` is a proven topology, not a guess: the caller sets it only when every frame in
  * the window is one this page stamped itself (see isOwnFrame). Both timestamps then come from
  * one Date.now in one JavaScript context, so the offset is exactly zero whatever the clock
  * exchange estimates, and the only error left is the resolution of Date.now.
+ *
+ * `monoNow` is performance.now(), for the age of the newest sample; without it the age is
+ * unknown and the bound is not widened for silence.
  */
-export const describeClock = (samples, { sameContext = false } = {}) => {
-  const usable = countUsableSamples(samples);
+/*
+ * The half-width of a steady 2 ms round trip is 2 ms plus the drift allowance for the sample's
+ * age and duration (2.25 ms at an age of one second). Without this the allowance alone would
+ * move a 2 ms path from exact to a range. It covers a newest sample up to a couple of seconds
+ * old at the 1 s ping cadence; a 3 ms round trip (2.5 ms plus drift) stays a range.
+ */
+const SAME_CLOCK_DRIFT_ALLOWANCE_MS = 0.5;
+
+export const describeClock = (samples, { sameContext = false, monoNow = null } = {}) => {
+  const estimate = estimateClock(samples, { monoNow });
 
   if (sameContext) {
     return {
       state: 'ok',
       offsetMs: 0,
       uncertaintyMs: TIMER_RESOLUTION_MS,
-      samples: usable,
+      samples: estimate.usable,
       mode: 'same-context',
       exact: true,
       warming: false,
+      resyncing: false,
+      wide: false,
+      ageMs: null,
+      stepAgeMs: null,
       reason: null,
     };
   }
 
-  const estimate = estimateOffset(samples);
-
-  if (estimate === null) {
+  if (estimate.offsetMs === null) {
     // Too few usable samples is the normal first few seconds, not a failure.
-    const warming = usable < MIN_SAMPLES;
+    const warming = estimate.usable < MIN_SAMPLES;
     return {
       state: 'unknown',
       offsetMs: null,
       uncertaintyMs: null,
-      samples: usable,
+      samples: estimate.usable,
       mode: null,
       exact: false,
       warming,
+      // Enough samples, too few of them agreeing: the clocks moved and the old ones were dropped.
+      resyncing: !warming,
+      wide: false,
+      ageMs: estimate.ageMs,
+      stepAgeMs: estimate.stepAgeMs,
       reason: warming
-        ? `Exchanging clock samples (${usable} of ${MIN_SAMPLES}).`
-        : 'The clock offset is not stable enough to measure.',
-    };
-  }
-
-  if (estimate.uncertaintyMs > MAX_TRUSTED_UNCERTAINTY_MS) {
-    return {
-      state: 'untrusted',
-      offsetMs: estimate.offsetMs,
-      uncertaintyMs: estimate.uncertaintyMs,
-      samples: estimate.samples,
-      mode: null,
-      exact: false,
-      warming: false,
-      reason: `Clock offset too uncertain to measure (± ${Math.round(estimate.uncertaintyMs)} ms).`,
+        ? `Exchanging clock samples (${estimate.usable} of ${MIN_SAMPLES}).`
+        : 'The clocks moved while measuring (a clock step or drift); syncing again.',
     };
   }
 
@@ -194,16 +209,21 @@ export const describeClock = (samples, { sameContext = false } = {}) => {
    * it needs a round trip of about 2 ms, so in practice a local Engine.
    */
   const sameClock = Math.abs(estimate.offsetMs) <= CLOCK_GRANULARITY_MS
-    && estimate.uncertaintyMs <= CLOCK_GRANULARITY_MS;
+    && estimate.uncertaintyMs <= CLOCK_GRANULARITY_MS + SAME_CLOCK_DRIFT_ALLOWANCE_MS;
+  const bound = estimate.uncertaintyMs + TIMER_RESOLUTION_MS;
 
   return {
     state: 'ok',
     offsetMs: estimate.offsetMs,
-    uncertaintyMs: estimate.uncertaintyMs,
+    uncertaintyMs: bound,
     samples: estimate.samples,
     mode: sameClock ? 'same-clock' : 'cross-machine',
     exact: sameClock,
     warming: false,
+    resyncing: false,
+    wide: !sameClock && bound > WIDE_RANGE_MS,
+    ageMs: estimate.ageMs,
+    stepAgeMs: estimate.stepAgeMs,
     reason: null,
   };
 };
@@ -237,8 +257,10 @@ export const recordSentStamp = (sentStamps, stamp) => {
  * The three figures for one received frame, or nulls where a figure cannot be had.
  *
  * `sentAt` is on the publisher's clock, so transport needs the offset (farTime - offsetMs is
- * local). The player leg subtracts two local monotonic readings and is reported without one. A
- * negative transport figure is returned as measured: it is the evidence of a wrong clock estimate.
+ * local). The player leg subtracts two local monotonic readings and is reported without one.
+ * A negative transport figure is returned as measured. It is no longer evidence of a wrong
+ * clock: the figure carries the offset's bound, a small true transport with an asymmetric path
+ * can read below zero inside that range, and the display clamps the range at zero.
  */
 export const frameLatency = (record, offsetMs) => {
   const transportMs = typeof offsetMs === 'number'
@@ -290,11 +312,11 @@ export const mediansOverOneFrameSet = (perFrame) => {
  *   stalled    stamped frames arrived and then stopped
  *   measuring  there is a figure
  */
-export const summarizeProbe = (state, now) => {
+export const summarizeProbe = (state, now, monoNow = null) => {
   // Proven, not inferred: every frame in the window is one this page stamped.
   const sameContext = state.frames.length > 0
     && state.frames.every((record) => record.own === true);
-  const clock = describeClock(state.clockSamples, { sameContext });
+  const clock = describeClock(state.clockSamples, { sameContext, monoNow });
   const base = {
     transportMs: null,
     playerMs: null,
@@ -351,7 +373,7 @@ export const summarizeProbe = (state, now) => {
     ...base,
     ...figures,
     status: 'measuring',
-    // A trusted clock is what the transport leg needs; the player leg never needed one.
+    // A clock range is what the transport leg needs; the player leg never needed one.
     reason: clock.state === 'ok' ? null : clock.reason,
   };
 };
@@ -472,7 +494,11 @@ const createState = () => ({
 });
 
 let state = createState();
-let sample = summarizeProbe(state, Date.now());
+// The monotonic reading the age of the newest clock sample is taken against (never Date.now,
+// which a clock step would corrupt).
+const monotonicNow = () => (typeof performance !== 'undefined' ? performance.now() : null);
+
+let sample = summarizeProbe(state, Date.now(), monotonicNow());
 const listeners = new Set();
 let emitTimer = null;
 
@@ -486,7 +512,7 @@ export const EMIT_INTERVAL_MS = 500;
  * a stall from the age of the last sample.
  */
 const emit = ({ force = false } = {}) => {
-  sample = summarizeProbe(state, Date.now());
+  sample = summarizeProbe(state, Date.now(), monotonicNow());
 
   if (state.stampedFrames === 0) {
     if (force) for (const fn of listeners) fn(null);
@@ -537,7 +563,8 @@ const resetMeasurements = () => {
   state.lastRung = null;
   state.lastFrameAt = null;
   state.joinedFrames = 0;
-  state.clockSamples = [];
+  // Emptied in place: the clock initiator of this session is already running and holds this array.
+  state.clockSamples.length = 0;
 };
 
 /** Back to nothing running and nothing measured. */
@@ -1055,8 +1082,10 @@ export const attachClockResponder = (peerConnection) => {
   return { close: () => channel?.close() };
 };
 
-// Ping cadence: fast until the estimator has MIN_SAMPLES, then slow. At one per second the
-// 32-sample window holds half a minute.
+// Ping cadence: fast until SETTLED_SAMPLES consistent samples agree, then slow. Driven by the
+// consistent samples, not by the count held, so a clock step that discards the old samples
+// brings the fast cadence back and the range returns in about a second. At one per second the
+// 20 s window holds twenty samples.
 const CLOCK_PING_FAST_MS = 250;
 const CLOCK_PING_SLOW_MS = 1000;
 
@@ -1071,6 +1100,13 @@ export const attachClockInitiator = (peerConnection) => {
   let closed = false;
   const pending = new Map();
   const id = newClockSessionId();
+  /*
+   * This initiator's own samples, and the only array it writes to. Taking the slot in the
+   * state makes a newer session the owner; an initiator that closes late keeps its array but
+   * no longer pushes into the shared state, so it cannot pollute the next session.
+   */
+  const samples = [];
+  state.clockSamples = samples;
 
   const channel = openClockChannel(peerConnection, false, (data, t3) => {
     const reply = parseClockMessage(data);
@@ -1079,9 +1115,12 @@ export const attachClockInitiator = (peerConnection) => {
     if (!pending.has(reply.sequence)) return;
     pending.delete(reply.sequence);
 
-    // Oldest first, which is the order estimateOffset documents that it needs.
-    state.clockSamples.push({ t0: reply.t0, t1: reply.t1, t2: reply.t2, t3 });
-    if (state.clockSamples.length > WINDOW_SAMPLES) state.clockSamples.shift();
+    // Oldest first, which is the order estimateClock documents that it needs. m3 is the
+    // monotonic reading the estimator takes ages from, since a step of the wall clock would
+    // corrupt an age taken from t3.
+    if (state.clockSamples !== samples) return;
+    samples.push({ t0: reply.t0, t1: reply.t1, t2: reply.t2, t3, m3: performance.now() });
+    if (samples.length > WINDOW_SAMPLES) samples.shift();
   });
 
   const tick = () => {
@@ -1098,8 +1137,8 @@ export const attachClockInitiator = (peerConnection) => {
     } catch {
       // Not open yet, or refused: retry. With no samples the clock already reports "cannot measure".
     }
-    timer = setTimeout(tick,
-      state.clockSamples.length < MIN_SAMPLES ? CLOCK_PING_FAST_MS : CLOCK_PING_SLOW_MS);
+    const settled = estimateClock(samples).samples >= SETTLED_SAMPLES;
+    timer = setTimeout(tick, settled ? CLOCK_PING_SLOW_MS : CLOCK_PING_FAST_MS);
   };
 
   tick();
