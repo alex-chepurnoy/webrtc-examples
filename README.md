@@ -1,10 +1,11 @@
 ![wowza media systems logo](images/wowza-logo.png)
 # Wowza Media Systems WebRTC client examples
 
-Welcome to the official Wowza Media Systems Web Real-time Communication (WebRTC) client examples. These examples cover four streaming scenarios:
+Welcome to the official Wowza Media Systems Web Real-time Communication (WebRTC) client examples. These examples cover three pages:
 
-- **Publish** — stream video and audio (or screen share) from a browser to Wowza Streaming Engine
-- **Play** — play back a live WebRTC stream from Wowza Streaming Engine in a browser
+- **Publish**: stream video and audio (or screen share) from a browser to Wowza Streaming Engine
+- **Play**: play back a live WebRTC stream from Wowza Streaming Engine in a browser
+- **Publish + Play**: run both side by side against the same Engine, with their own settings, statistics and chat
 
 ## Contents
 
@@ -15,6 +16,8 @@ Welcome to the official Wowza Media Systems Web Real-time Communication (WebRTC)
   - [What's new in v2](#whats-new-in-v2)
   - [Diagnostics in the v2 example](#diagnostics-in-the-v2-example)
   - [Frame stamp latency probe](#frame-stamp-latency-probe)
+  - [Publisher source settings](#publisher-source-settings)
+  - [Automatic reconnect](#automatic-reconnect)
   - [Combined publisher and player](#combined-publisher-and-player)
   - [Running the tests](#running-the-tests)
   - [Directory Structure](#directory-structure)
@@ -354,16 +357,61 @@ Publisher to player and Clock rows after about 30 seconds of each run.
   frame that does not parse as H.264 untouched. Selecting an explicit non-H.264 codec
   disables the toggle with the reason.
 
+### Publisher source settings
+
+The publisher's Source tab sets what the browser sends. Video comes first, then audio.
+
+- **Max video bitrate and Max audio bitrate** are caps in kbps (video 50 to 20000, audio
+  6 to 510). Blank leaves the rate to the browser. A cap applies to the live sender, so it
+  can change while publishing, and a field takes its new value when you leave it.
+- **When bandwidth is short** chooses what the browser gives up first when the connection
+  cannot carry the stream: frame rate, resolution, or a balance of the two.
+- **Simulcast** sends several renditions of the same video. Each row has a **Rendition ID**
+  (the name the Engine and players use for that rendition), a **Scale down** factor (how
+  much smaller the picture is than the source) and its own **Max (kbps)**. Chrome encodes at
+  most three simulcast layers, so the page offers no more than three renditions. Rendition
+  IDs and the number of renditions are fixed when the connection is made; scale down and
+  max bitrate can change while live.
+- Hover the help marks next to a setting for a short explanation.
+
+### Automatic reconnect
+
+A live publisher or player recovers on its own when the Engine loses its session. An ICE
+restart repairs a broken network path. It cannot help when the Engine restarts, or when the
+application restarts under a live session, because the session on the Engine is gone. In
+that case the page opens a new one.
+
+- **How it retries.** Waits of 1, 2, 4, 8 and 15 seconds (with a little jitter), up to six
+  attempts, then shows an error. A refusal that no retry changes (401, 403, 404) stops at
+  once. A stream that is not running yet, or an Engine that cannot be reached, is waited
+  out for up to two minutes instead of being counted as an attempt.
+- **What you see.** The header shows `Reconnecting`, the settings stay locked while the
+  page is retrying because the new session reuses them, and each attempt is written to the
+  Server communication log.
+- **Application restarts.** The Engine closes nothing in this case, so a publisher page
+  keeps reading LIVE with nothing behind it. The page asks the Engine on its own short-lived
+  socket every 20 seconds whether the stream is still listed, and treats two misses in a row
+  as a lost session. This needs the application's stream query option
+  (`Query Published Stream Names`) turned on. With it off, the Engine answers 400 or 403, the
+  check stops with one warning, and publishing carries on.
+- **Not used for the first connection.** A session that fails before it was ever live is an
+  ordinary error, as before.
+
 ### Combined publisher and player
 
 `Publish + Play` runs a publisher and a player side by side against the same Engine, each
 with its own settings and its own statistics. The two are independent peer connections, so
 their figures are per side and do not sum to a round-trip measurement.
 
+When **Enable Chat** is on for either side, a collapsible chat section appears under the two
+videos, so a message sent by the publisher and its arrival at the player can be watched on
+one screen.
+
 ### Running the tests
 
 ```bash
 npm test          # unit tests (Vitest)
+npm run lint      # ESLint
 npm run test:e2e  # end-to-end tests (Playwright)
 ```
 
@@ -382,30 +430,39 @@ set WOWZA_SIGNALING_URL=wss://your-engine/webrtc-session.json
 set WOWZA_APPLICATION=webrtc
 ```
 
+`npm run test:e2e` builds the app in a test mode (`--mode e2e`) and serves it on port 4183.
+Set `E2E_PORT` to use another port. The test mode is a production build in every way but
+two: the reconnect suites can shorten their timings, and the clock tests can simulate a
+remote clock. A normal build contains neither.
+
 Tests that need an Engine skip themselves when one is not reachable, so the suite is still
-useful without a server. It covers publish and play over both signalling paths, WHIP ingest and WHEP egress, the chat and captions data channels, the header status, the diagnostics panel and the stats graphs.
+useful without a server. **A run with many skipped tests means the Engine was not reached,
+not that it passed.** The suite covers publish and play over both signalling paths, WHIP
+ingest and WHEP egress, the chat and captions data channels, the Source tab limits,
+automatic reconnect for publisher and player, the frame stamp latency probe and its clock
+range, the header status, the diagnostics panel and the stats graphs.
 
 ### Directory structure
 
 The repository is a single React app. The legacy v1 examples (jQuery and the Redux-based React example) have been removed; they remain in the upstream repository's history.
 
-- `src/components` — React components for the publish and play examples
-    - `play` — Components for playing back a WebRTC stream
-    - `publish` — Components for publishing a WebRTC stream
-- `src/hooks`
-    - `useMediaStream.js` — Custom hook for managing the active media stream ref
-- `src/webrtc` — JavaScript files for managing the WebRTC setup
-    - `SecureToken.js` — Builds a secure token hash
-    - `getDevices.js`, `getUserMedia.js`, `getDisplayScreen.js` — Media device helpers
-    - `replaceAudioTrack.js`, `replaceVideoTrack.js` — Track replacement utilities
-    - `startPlay.js`, `stopPlay.js`, `startPublish.js`, `stopPublish.js` — Stream lifecycle helpers
-- `src/utils` — Utility functions
-    - `IceServersUtils.js` — Validation and configuration helpers for STUN/TURN ICE servers
-    - `ValidationUtils.js` — Form validation utilities
-    - `CookieUtils.js` — Cookie read/write helpers
-- `src/actions`, `src/reducers` — Redux state management
-- `e2e` — End-to-end tests (Playwright)
-- `public` — Static assets copied into the build as is
+- `src/components`: React components
+    - `publish`, `play`: the Publish and Play pages, including the Source tab controls
+    - `loopback`: the combined Publish + Play page and its chat
+    - `diagnostics`: statistics, the latency group and sparklines, the Server communication log
+    - `shell`: header, status badges, side rail and layout
+    - `media`, `shared`: device pickers and small shared pieces
+- `src/webrtc`: WebRTC setup and session handling
+    - `startPublish.js`, `startPlay.js` and their stop helpers: stream lifecycle
+    - `sessionSupervisor.js`, `publishSupervisor.js`, `playSupervisor.js`, `livenessProbe.js`: automatic reconnect
+    - `SecureToken.js`: builds a secure token hash
+    - `getDevices.js`, `getUserMedia.js`, `getDisplayScreen.js`, `replaceAudioTrack.js`, `replaceVideoTrack.js`: media helpers
+- `src/diagnostics`: statistics, the signaling log, and the frame stamp latency probe (`latencyProbe.js`, `frameTransforms.js`, `clockSync.js`)
+- `src/utils`: validation, ICE server, simulcast, sender parameter and codec helpers
+- `src/hooks`: React hooks
+- `src/actions`, `src/reducers`: Redux state management
+- `e2e`: end-to-end tests (Playwright)
+- `public`: static assets copied into the build as is
 
 ### Run the example code
 
